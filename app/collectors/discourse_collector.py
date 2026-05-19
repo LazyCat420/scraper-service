@@ -1,0 +1,377 @@
+"""
+discourse_collector.py — Discourse forum collector
+-----------------------------------------------------
+Collects posts from Discourse-based forums using their public JSON API.
+No scraping needed — Discourse exposes /latest.json, /t/{id}.json, etc.
+
+Primary target: Overgrow.com (cannabis growing community)
+Works with ANY Discourse forum by changing base_url.
+"""
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+
+from app.core.rate_limiter import rate_limiter
+from app.core.session_manager import session_manager
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ForumPost:
+    """Normalized forum post data."""
+    id: str
+    topic_id: int
+    title: str
+    body: str
+    author: str
+    created_at: datetime | None
+    url: str
+    forum_name: str
+    category: str
+    tags: list[str]
+    post_number: int = 1
+    reply_count: int = 0
+    like_count: int = 0
+    views: int = 0
+
+
+class DiscourseCollector:
+    """Collects posts from Discourse forums via public JSON API.
+
+    Discourse API endpoints used:
+      - /latest.json — Latest topics
+      - /top.json — Top topics (by period)
+      - /c/{category_slug}/{id}.json — Topics in category
+      - /t/{topic_id}.json — Full topic with posts
+      - /search.json — Full-text search
+      - /tags/{tag}.json — Topics by tag
+
+    No API key required for public forums.
+    """
+
+    def __init__(self, base_url: str, forum_name: str = "discourse"):
+        self.base_url = base_url.rstrip("/")
+        self.forum_name = forum_name
+
+    async def get_latest_topics(
+        self,
+        limit: int = 30,
+        page: int = 0,
+    ) -> list[ForumPost]:
+        """Get latest topics from the forum."""
+        url = f"{self.base_url}/latest.json"
+        params = {"page": page}
+
+        data = await self._api_get(url, params)
+        if not data:
+            return []
+
+        topics = data.get("topic_list", {}).get("topics", [])
+        users = {u["id"]: u for u in data.get("users", [])}
+
+        results = []
+        for topic in topics[:limit]:
+            post = self._topic_to_post(topic, users)
+            if post:
+                results.append(post)
+
+        logger.info(f"[discourse] {self.forum_name}: {len(results)} latest topics")
+        return results
+
+    async def get_top_topics(
+        self,
+        period: str = "weekly",
+        limit: int = 30,
+    ) -> list[ForumPost]:
+        """Get top topics by period: daily, weekly, monthly, quarterly, yearly, all."""
+        url = f"{self.base_url}/top.json"
+        params = {"period": period}
+
+        data = await self._api_get(url, params)
+        if not data:
+            return []
+
+        topics = data.get("topic_list", {}).get("topics", [])
+        users = {u["id"]: u for u in data.get("users", [])}
+
+        results = []
+        for topic in topics[:limit]:
+            post = self._topic_to_post(topic, users)
+            if post:
+                results.append(post)
+
+        logger.info(f"[discourse] {self.forum_name}: {len(results)} top/{period} topics")
+        return results
+
+    async def get_category_topics(
+        self,
+        category_slug: str,
+        category_id: int,
+        limit: int = 30,
+    ) -> list[ForumPost]:
+        """Get topics from a specific category."""
+        url = f"{self.base_url}/c/{category_slug}/{category_id}.json"
+
+        data = await self._api_get(url)
+        if not data:
+            return []
+
+        topics = data.get("topic_list", {}).get("topics", [])
+        users = {u["id"]: u for u in data.get("users", [])}
+
+        results = []
+        for topic in topics[:limit]:
+            post = self._topic_to_post(topic, users)
+            if post:
+                results.append(post)
+
+        logger.info(f"[discourse] {self.forum_name}/{category_slug}: {len(results)} topics")
+        return results
+
+    async def get_topic_posts(
+        self,
+        topic_id: int,
+        max_posts: int = 50,
+    ) -> list[ForumPost]:
+        """Get all posts in a specific topic (thread)."""
+        url = f"{self.base_url}/t/{topic_id}.json"
+
+        data = await self._api_get(url)
+        if not data:
+            return []
+
+        title = data.get("title", "")
+        category_id = data.get("category_id", 0)
+        tags = data.get("tags", [])
+
+        post_stream = data.get("post_stream", {})
+        posts = post_stream.get("posts", [])
+
+        results = []
+        for post_data in posts[:max_posts]:
+            created = post_data.get("created_at", "")
+            created_at = None
+            if created:
+                try:
+                    created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+
+            # Strip HTML from cooked content
+            body = post_data.get("cooked", "")
+            body = self._strip_html(body)
+
+            if not body or len(body) < 10:
+                continue
+
+            results.append(ForumPost(
+                id=str(post_data.get("id", "")),
+                topic_id=topic_id,
+                title=title,
+                body=body,
+                author=post_data.get("username", ""),
+                created_at=created_at,
+                url=f"{self.base_url}/t/{data.get('slug', '')}/{topic_id}/{post_data.get('post_number', 1)}",
+                forum_name=self.forum_name,
+                category=str(category_id),
+                tags=tags,
+                post_number=post_data.get("post_number", 1),
+                reply_count=post_data.get("reply_count", 0),
+                like_count=post_data.get("actions_summary", [{}])[0].get("count", 0) if post_data.get("actions_summary") else 0,
+            ))
+
+        logger.info(f"[discourse] Topic {topic_id}: {len(results)} posts")
+        return results
+
+    async def search(
+        self,
+        query: str,
+        category_slug: str | None = None,
+        tags: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[ForumPost]:
+        """Full-text search across the forum.
+
+        Discourse search syntax supports:
+          - category:slug — restrict to category
+          - tags:tag1,tag2 — filter by tags
+          - after:2024-01-01 — date filter
+          - in:title — search titles only
+        """
+        search_query = query
+        if category_slug:
+            search_query += f" category:{category_slug}"
+        if tags:
+            search_query += f" tags:{','.join(tags)}"
+
+        url = f"{self.base_url}/search.json"
+        params = {"q": search_query}
+
+        data = await self._api_get(url, params)
+        if not data:
+            return []
+
+        topics = data.get("topics", [])
+        posts_data = data.get("posts", [])
+
+        # Build topic title lookup
+        topic_titles = {t["id"]: t for t in topics}
+
+        results = []
+        for post_data in posts_data[:limit]:
+            topic_id = post_data.get("topic_id", 0)
+            topic_info = topic_titles.get(topic_id, {})
+
+            created = post_data.get("created_at", "")
+            created_at = None
+            if created:
+                try:
+                    created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+
+            body = post_data.get("blurb", "") or self._strip_html(post_data.get("cooked", ""))
+
+            if not body or len(body) < 10:
+                continue
+
+            results.append(ForumPost(
+                id=str(post_data.get("id", "")),
+                topic_id=topic_id,
+                title=topic_info.get("title", ""),
+                body=body,
+                author=post_data.get("username", ""),
+                created_at=created_at,
+                url=f"{self.base_url}/t/{topic_info.get('slug', '')}/{topic_id}/{post_data.get('post_number', 1)}",
+                forum_name=self.forum_name,
+                category=str(topic_info.get("category_id", "")),
+                tags=topic_info.get("tags", []),
+                post_number=post_data.get("post_number", 1),
+                like_count=post_data.get("like_count", 0),
+            ))
+
+        logger.info(f"[discourse] Search '{query}': {len(results)} results")
+        return results
+
+    async def get_topics_by_tag(
+        self,
+        tag: str,
+        limit: int = 30,
+    ) -> list[ForumPost]:
+        """Get topics tagged with a specific tag."""
+        url = f"{self.base_url}/tag/{tag}.json"
+
+        data = await self._api_get(url)
+        if not data:
+            return []
+
+        topics = data.get("topic_list", {}).get("topics", [])
+        users = {u["id"]: u for u in data.get("users", [])}
+
+        results = []
+        for topic in topics[:limit]:
+            post = self._topic_to_post(topic, users)
+            if post:
+                results.append(post)
+
+        logger.info(f"[discourse] Tag '{tag}': {len(results)} topics")
+        return results
+
+    async def _api_get(self, url: str, params: dict | None = None) -> dict | None:
+        """Make rate-limited GET request to Discourse API."""
+        from urllib.parse import urlparse
+        domain = urlparse(self.base_url).netloc
+
+        try:
+            async with rate_limiter.acquire(domain):
+                r = await session_manager.client.get(
+                    url,
+                    params=params,
+                    headers={"Accept": "application/json"},
+                    timeout=30.0,
+                )
+
+            if r.status_code == 429:
+                logger.warning(f"[discourse] {self.forum_name}: rate limited")
+                return None
+
+            if r.status_code != 200:
+                logger.warning(f"[discourse] {self.forum_name}: HTTP {r.status_code} for {url}")
+                return None
+
+            return r.json()
+
+        except Exception as e:
+            logger.error(f"[discourse] {self.forum_name} API error: {e}")
+            return None
+
+    def _topic_to_post(self, topic: dict, users: dict) -> ForumPost | None:
+        """Convert a Discourse topic dict to ForumPost."""
+        title = topic.get("title", "")
+        if not title:
+            return None
+
+        # Find the original poster
+        posters = topic.get("posters", [])
+        op_user_id = None
+        for p in posters:
+            if "Original Poster" in p.get("description", ""):
+                op_user_id = p.get("user_id")
+                break
+        author = users.get(op_user_id, {}).get("username", "") if op_user_id else ""
+
+        created = topic.get("created_at", "")
+        created_at = None
+        if created:
+            try:
+                created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+        return ForumPost(
+            id=str(topic.get("id", "")),
+            topic_id=topic.get("id", 0),
+            title=title,
+            body=topic.get("excerpt", ""),
+            author=author,
+            created_at=created_at,
+            url=f"{self.base_url}/t/{topic.get('slug', '')}/{topic.get('id', '')}",
+            forum_name=self.forum_name,
+            category=str(topic.get("category_id", "")),
+            tags=topic.get("tags", []),
+            reply_count=topic.get("reply_count", 0),
+            like_count=topic.get("like_count", 0),
+            views=topic.get("views", 0),
+        )
+
+    @staticmethod
+    def _strip_html(html: str) -> str:
+        """Remove HTML tags from Discourse cooked content."""
+        import re
+        text = re.sub(r"<[^>]+>", " ", html)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+
+def _serialize_forum_post(post: ForumPost) -> dict:
+    """Convert ForumPost to JSON-safe dict for API responses."""
+    return {
+        "id": post.id,
+        "topic_id": post.topic_id,
+        "title": post.title,
+        "body": post.body,
+        "author": post.author,
+        "created_at": post.created_at.isoformat() if post.created_at else None,
+        "url": post.url,
+        "forum_name": post.forum_name,
+        "category": post.category,
+        "tags": post.tags,
+        "post_number": post.post_number,
+        "reply_count": post.reply_count,
+        "like_count": post.like_count,
+        "views": post.views,
+    }
