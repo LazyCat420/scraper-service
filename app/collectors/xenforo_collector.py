@@ -191,7 +191,8 @@ class XenForoCollector:
                 body_el = post_el.select_one(".message-body .bbWrapper")
                 if not body_el:
                     continue
-                image_urls = self._extract_images(body_el)
+                content_el = post_el.select_one(".message-content") or post_el
+                image_urls = self._extract_images(content_el)
                 body = body_el.get_text(separator=" ", strip=True)
                 if not body or len(body) < 10:
                     continue
