@@ -62,6 +62,7 @@ async def scrape_url(req: ScrapeRequest):
         engine_used=result.engine_used,
         scraped_at=result.scraped_at,
         status_code=result.status_code,
+        screenshot_b64=getattr(result, "screenshot_b64", None),
     )
 
 

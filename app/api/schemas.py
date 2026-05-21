@@ -26,6 +26,7 @@ class ScrapeResponse(BaseModel):
     engine_used: str
     scraped_at: datetime
     status_code: int | None = None
+    screenshot_b64: str | None = None
 
 
 class BatchRequest(BaseModel):

@@ -121,11 +121,25 @@ class PlaywrightEngine(BaseEngine):
                     )
                     page = await context.new_page()
 
+                    # Apply stealth to bypass Cloudflare
+                    try:
+                        from playwright_stealth import stealth_async
+                        await stealth_async(page)
+                    except Exception as stealth_err:
+                        logger.warning(f"[playwright] Failed to apply stealth: {stealth_err}")
+
                     # Block heavy resources to speed up loading
-                    await page.route(
-                        "**/*.{png,jpg,jpeg,gif,svg,mp4,webm,woff,woff2}",
-                        lambda route: route.abort(),
-                    )
+                    allow_images = options.get("allow_images", False)
+                    if allow_images:
+                        await page.route(
+                            "**/*.{mp4,webm,woff,woff2}",
+                            lambda route: route.abort(),
+                        )
+                    else:
+                        await page.route(
+                            "**/*.{png,jpg,jpeg,gif,svg,mp4,webm,woff,woff2}",
+                            lambda route: route.abort(),
+                        )
 
                     # Navigate
                     timeout_ms = options.get("timeout", 20000)
@@ -193,18 +207,25 @@ class PlaywrightEngine(BaseEngine):
                             except Exception:
                                 data[field_name] = []
 
-                    # Extract article text
-                    article_text = await page.evaluate(EXTRACT_ARTICLE_JS)
+                    # Extract raw HTML or article text
+                    raw_html = options.get("raw_html", False)
+                    if raw_html:
+                        content_data = await page.content()
+                    else:
+                        content_data = await page.evaluate(EXTRACT_ARTICLE_JS)
 
                     await browser.close()
 
-            # Clean up extracted text
+            # Clean up/format content
             content = None
-            if article_text:
-                content = re.sub(r"\n{3,}", "\n\n", article_text).strip()
-                max_chars = options.get("max_chars", 15000)
-                if len(content) > max_chars:
-                    content = content[:max_chars]
+            if content_data:
+                if raw_html:
+                    content = content_data
+                else:
+                    content = re.sub(r"\n{3,}", "\n\n", content_data).strip()
+                    max_chars = options.get("max_chars", 15000)
+                    if len(content) > max_chars:
+                        content = content[:max_chars]
 
             return ScrapeResult(
                 url=url,

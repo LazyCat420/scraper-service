@@ -20,9 +20,6 @@ feedparser==6.0.12
 # Cloudflare bypass
 cloudscraper>=1.2.71
 
-# Reddit
-asyncpraw>=7.7.0
-
 # YouTube
 yt-dlp==2026.3.17
 youtube-transcript-api==1.2.4

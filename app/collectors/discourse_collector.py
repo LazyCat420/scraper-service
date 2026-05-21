@@ -10,7 +10,7 @@ Works with ANY Discourse forum by changing base_url.
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -37,6 +37,7 @@ class ForumPost:
     reply_count: int = 0
     like_count: int = 0
     views: int = 0
+    image_urls: list[str] = field(default_factory=list)
 
 
 class DiscourseCollector:
@@ -161,9 +162,12 @@ class DiscourseCollector:
                 except Exception:
                     pass
 
+            # Extract images from cooked HTML before stripping
+            cooked_html = post_data.get("cooked", "")
+            image_urls = self._extract_images(cooked_html)
+
             # Strip HTML from cooked content
-            body = post_data.get("cooked", "")
-            body = self._strip_html(body)
+            body = self._strip_html(cooked_html)
 
             if not body or len(body) < 10:
                 continue
@@ -182,6 +186,7 @@ class DiscourseCollector:
                 post_number=post_data.get("post_number", 1),
                 reply_count=post_data.get("reply_count", 0),
                 like_count=post_data.get("actions_summary", [{}])[0].get("count", 0) if post_data.get("actions_summary") else 0,
+                image_urls=image_urls,
             ))
 
         logger.info(f"[discourse] Topic {topic_id}: {len(results)} posts")
@@ -234,7 +239,9 @@ class DiscourseCollector:
                 except Exception:
                     pass
 
-            body = post_data.get("blurb", "") or self._strip_html(post_data.get("cooked", ""))
+            cooked_html = post_data.get("cooked", "")
+            image_urls = self._extract_images(cooked_html)
+            body = post_data.get("blurb", "") or self._strip_html(cooked_html)
 
             if not body or len(body) < 10:
                 continue
@@ -252,6 +259,7 @@ class DiscourseCollector:
                 tags=topic_info.get("tags", []),
                 post_number=post_data.get("post_number", 1),
                 like_count=post_data.get("like_count", 0),
+                image_urls=image_urls,
             ))
 
         logger.info(f"[discourse] Search '{query}': {len(results)} results")
@@ -348,6 +356,51 @@ class DiscourseCollector:
             views=topic.get("views", 0),
         )
 
+    def _extract_images(self, html: str) -> list[str]:
+        """Extract image URLs from post HTML, ignoring emoticons/smileys/avatars."""
+        import re
+        from bs4 import BeautifulSoup
+        if not html:
+            return []
+        try:
+            soup = BeautifulSoup(html, "lxml")
+            images = []
+            for img in soup.find_all("img"):
+                src = img.get("src") or img.get("data-orig-src")
+                if not src:
+                    continue
+                # Skip emoticons, avatars, small icons
+                src_lower = src.lower()
+                if any(term in src_lower for term in [
+                    "emoji", "emoticon", "avatar", "smiley", "icon", 
+                    "profile", "logo", "flag", "badge", "gravatar",
+                    "/images/emoji/", "/plugins/discourse-"
+                ]):
+                    continue
+                # Skip very small images (if size is indicated in attributes)
+                width = img.get("width")
+                height = img.get("height")
+                try:
+                    if width and int(width) < 50:
+                        continue
+                    if height and int(height) < 50:
+                        continue
+                except ValueError:
+                    pass
+                
+                # Make URL absolute if relative
+                if src.startswith("//"):
+                    src = "https:" + src
+                elif src.startswith("/"):
+                    src = self.base_url + src
+                
+                if src not in images:
+                    images.append(src)
+            return images
+        except Exception as e:
+            logger.error(f"[discourse] Failed to extract images: {e}")
+            return []
+
     @staticmethod
     def _strip_html(html: str) -> str:
         """Remove HTML tags from Discourse cooked content."""
@@ -374,4 +427,5 @@ def _serialize_forum_post(post: ForumPost) -> dict:
         "reply_count": post.reply_count,
         "like_count": post.like_count,
         "views": post.views,
+        "image_urls": post.image_urls,
     }

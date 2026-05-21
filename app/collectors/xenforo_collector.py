@@ -13,7 +13,7 @@ import asyncio
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -40,6 +40,7 @@ class XenForoPost:
     subforum: str
     post_number: int = 1
     reaction_score: int = 0
+    image_urls: list[str] = field(default_factory=list)
 
 
 class XenForoCollector:
@@ -190,6 +191,7 @@ class XenForoCollector:
                 body_el = post_el.select_one(".message-body .bbWrapper")
                 if not body_el:
                     continue
+                image_urls = self._extract_images(body_el)
                 body = body_el.get_text(separator=" ", strip=True)
                 if not body or len(body) < 10:
                     continue
@@ -242,6 +244,7 @@ class XenForoCollector:
                     subforum="",
                     post_number=post_number,
                     reaction_score=reaction_score,
+                    image_urls=image_urls,
                 ))
 
                 if len(all_posts) >= max_posts:
@@ -296,6 +299,7 @@ class XenForoCollector:
                 except Exception:
                     pass
 
+            image_urls = self._extract_images(snippet_el) if snippet_el else []
             results.append(XenForoPost(
                 id=hashlib.md5(result_url.encode()).hexdigest()[:12],
                 thread_id="",
@@ -306,6 +310,7 @@ class XenForoCollector:
                 url=result_url,
                 forum_name=self.forum_name,
                 subforum="search",
+                image_urls=image_urls,
             ))
 
             if len(results) >= limit:
@@ -358,6 +363,11 @@ class XenForoCollector:
                                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                             )
                             page = await context.new_page()
+                            try:
+                                from playwright_stealth import stealth_async
+                                await stealth_async(page)
+                            except Exception as stealth_err:
+                                logger.warning(f"[xenforo] Failed to apply stealth in fallback: {stealth_err}")
                             await page.goto(url, wait_until="domcontentloaded", timeout=20000)
                             await page.wait_for_timeout(2000)
                             html = await page.content()
@@ -367,6 +377,47 @@ class XenForoCollector:
                 logger.error(f"[xenforo] Playwright fallback failed: {e}")
 
         return None
+
+
+    def _extract_images(self, element) -> list[str]:
+        """Extract image URLs from XenForo body/snippet element, ignoring avatars/smileys/emojis."""
+        if not element:
+            return []
+        try:
+            images = []
+            for img in element.find_all("img"):
+                src = img.get("src") or img.get("data-url")
+                if not src:
+                    continue
+                src_lower = src.lower()
+                if any(term in src_lower for term in [
+                    "emoji", "smilie", "avatar", "smiley", "icon", 
+                    "profile", "logo", "flag", "badge", "gravatar",
+                    "/styles/default/xenforo/smilies", "/attachments/emoticon"
+                ]):
+                    continue
+                # Skip small image tags
+                width = img.get("width")
+                height = img.get("height")
+                try:
+                    if width and int(width) < 50:
+                        continue
+                    if height and int(height) < 50:
+                        continue
+                except ValueError:
+                    pass
+
+                if src.startswith("//"):
+                    src = "https:" + src
+                elif src.startswith("/"):
+                    src = self.base_url + src
+                
+                if src not in images:
+                    images.append(src)
+            return images
+        except Exception as e:
+            logger.error(f"[xenforo] Failed to extract images: {e}")
+            return []
 
 
 def _serialize_xenforo_post(post: XenForoPost) -> dict:
@@ -383,4 +434,5 @@ def _serialize_xenforo_post(post: XenForoPost) -> dict:
         "subforum": post.subforum,
         "post_number": post.post_number,
         "reaction_score": post.reaction_score,
+        "image_urls": post.image_urls,
     }
