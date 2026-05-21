@@ -265,60 +265,111 @@ class XenForoCollector:
         query: str,
         limit: int = 50,
     ) -> list[XenForoPost]:
-        """Search the forum using XenForo's search endpoint."""
-        url = f"{self.base_url}/search/search"
-        params = {"keywords": query, "type": "post", "order": "relevance"}
+        """Search the forum using DuckDuckGo first, falling back to XenForo's search endpoint."""
+        from urllib.parse import urlparse
+        domain = urlparse(self.base_url).netloc
 
-        html = await self._fetch_html(url, params=params)
-        if not html:
-            return []
-
-        soup = BeautifulSoup(html, "lxml")
         results = []
+        ddg_success = False
 
-        for item in soup.select(".block-row"):
-            title_el = item.select_one("h3 a")
-            if not title_el:
-                continue
+        try:
+            from ddgs import DDGS
+            ddg_query = f"site:{domain} {query}"
+            logger.info(f"[xenforo] Querying DuckDuckGo: {ddg_query}")
 
-            title = title_el.get_text(strip=True)
-            result_url = urljoin(self.base_url, title_el.get("href", ""))
+            def run_ddg():
+                with DDGS() as ddgs:
+                    return list(ddgs.text(ddg_query, max_results=20))
 
-            snippet_el = item.select_one(".contentRow-snippet")
-            snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+            loop = asyncio.get_running_loop()
+            ddg_results = await loop.run_in_executor(None, run_ddg)
 
-            author_el = item.select_one(".contentRow-minor a.username")
-            author = author_el.get_text(strip=True) if author_el else ""
+            if ddg_results:
+                for item in ddg_results:
+                    href = item.get("href", "")
+                    title = item.get("title", "")
+                    snippet = item.get("body", "")
 
-            time_el = item.select_one("time[datetime]")
-            created_at = None
-            if time_el:
-                try:
-                    created_at = datetime.fromisoformat(
-                        time_el["datetime"].replace("Z", "+00:00")
-                    )
-                except Exception:
-                    pass
+                    # Extract thread URL
+                    match = re.search(r"(.+?/(?:threads|t)/[^/]+?\.?\d+)/?", href)
+                    if match:
+                        thread_url = match.group(1) + "/"
+                        
+                        # Avoid duplicates
+                        if any(r.url == thread_url for r in results):
+                            continue
 
-            image_urls = self._extract_images(snippet_el) if snippet_el else []
-            results.append(XenForoPost(
-                id=hashlib.md5(result_url.encode()).hexdigest()[:12],
-                thread_id="",
-                title=title,
-                body=snippet,
-                author=author,
-                created_at=created_at,
-                url=result_url,
-                forum_name=self.forum_name,
-                subforum="search",
-                image_urls=image_urls,
-            ))
+                        results.append(XenForoPost(
+                            id=hashlib.md5(thread_url.encode()).hexdigest()[:12],
+                            thread_id="",
+                            title=title,
+                            body=snippet,
+                            author="Unknown",
+                            created_at=None,
+                            url=thread_url,
+                            forum_name=self.forum_name,
+                            subforum="search",
+                            image_urls=[],
+                        ))
 
-            if len(results) >= limit:
-                break
+                if results:
+                    ddg_success = True
+                    logger.info(f"[xenforo] DDG search yielded {len(results)} threads")
+        except Exception as e:
+            logger.warning(f"[xenforo] DDG search failed: {e}. Falling back to internal search.")
 
-        logger.info(f"[xenforo] Search '{query}': {len(results)} results")
-        return results
+        if not ddg_success:
+            logger.info(f"[xenforo] Falling back to internal search for '{query}'")
+            url = f"{self.base_url}/search/search"
+            params = {"keywords": query, "type": "post", "order": "relevance"}
+
+            html = await self._fetch_html(url, params=params)
+            if html:
+                soup = BeautifulSoup(html, "lxml")
+                for item in soup.select(".block-row"):
+                    title_el = item.select_one("h3 a")
+                    if not title_el:
+                        continue
+
+                    title = title_el.get_text(strip=True)
+                    result_url = urljoin(self.base_url, title_el.get("href", ""))
+
+                    snippet_el = item.select_one(".contentRow-snippet")
+                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+                    author_el = item.select_one(".contentRow-minor a.username")
+                    author = author_el.get_text(strip=True) if author_el else ""
+
+                    time_el = item.select_one("time[datetime]")
+                    created_at = None
+                    if time_el:
+                        try:
+                            created_at = datetime.fromisoformat(
+                                time_el["datetime"].replace("Z", "+00:00")
+                            )
+                        except Exception:
+                            pass
+
+                    image_urls = self._extract_images(snippet_el) if snippet_el else []
+                    results.append(XenForoPost(
+                        id=hashlib.md5(result_url.encode()).hexdigest()[:12],
+                        thread_id="",
+                        title=title,
+                        body=snippet,
+                        author=author,
+                        created_at=created_at,
+                        url=result_url,
+                        forum_name=self.forum_name,
+                        subforum="search",
+                        image_urls=image_urls,
+                    ))
+
+                    if len(results) >= limit:
+                        break
+
+            logger.info(f"[xenforo] Internal search '{query}': {len(results)} results")
+
+        return results[:limit]
 
     async def _fetch_html(self, url: str, params: dict | None = None) -> str | None:
         """Fetch page HTML — tries HTTP first, falls back to Playwright."""

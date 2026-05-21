@@ -199,71 +199,112 @@ class DiscourseCollector:
         tags: list[str] | None = None,
         limit: int = 50,
     ) -> list[ForumPost]:
-        """Full-text search across the forum.
-
-        Discourse search syntax supports:
-          - category:slug — restrict to category
-          - tags:tag1,tag2 — filter by tags
-          - after:2024-01-01 — date filter
-          - in:title — search titles only
-        """
-        search_query = query
-        if category_slug:
-            search_query += f" category:{category_slug}"
-        if tags:
-            search_query += f" tags:{','.join(tags)}"
-
-        url = f"{self.base_url}/search.json"
-        params = {"q": search_query}
-
-        data = await self._api_get(url, params)
-        if not data:
-            return []
-
-        topics = data.get("topics", [])
-        posts_data = data.get("posts", [])
-
-        # Build topic title lookup
-        topic_titles = {t["id"]: t for t in topics}
+        """Search the forum, trying DuckDuckGo site search first, then falling back to internal search."""
+        from urllib.parse import urlparse
+        domain = urlparse(self.base_url).netloc
 
         results = []
-        for post_data in posts_data[:limit]:
-            topic_id = post_data.get("topic_id", 0)
-            topic_info = topic_titles.get(topic_id, {})
+        ddg_success = False
 
-            created = post_data.get("created_at", "")
-            created_at = None
-            if created:
-                try:
-                    created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                except Exception:
-                    pass
+        try:
+            from ddgs import DDGS
+            ddg_query = f"site:{domain} {query}"
+            logger.info(f"[discourse] Querying DuckDuckGo: {ddg_query}")
 
-            cooked_html = post_data.get("cooked", "")
-            image_urls = self._extract_images(cooked_html)
-            body = post_data.get("blurb", "") or self._strip_html(cooked_html)
+            def run_ddg():
+                with DDGS() as ddgs:
+                    return list(ddgs.text(ddg_query, max_results=20))
 
-            if not body or len(body) < 10:
-                continue
+            loop = asyncio.get_running_loop()
+            ddg_results = await loop.run_in_executor(None, run_ddg)
 
-            results.append(ForumPost(
-                id=str(post_data.get("id", "")),
-                topic_id=topic_id,
-                title=topic_info.get("title", ""),
-                body=body,
-                author=post_data.get("username", ""),
-                created_at=created_at,
-                url=f"{self.base_url}/t/{topic_info.get('slug', '')}/{topic_id}/{post_data.get('post_number', 1)}",
-                forum_name=self.forum_name,
-                category=str(topic_info.get("category_id", "")),
-                tags=topic_info.get("tags", []),
-                post_number=post_data.get("post_number", 1),
-                like_count=post_data.get("like_count", 0),
-                image_urls=image_urls,
-            ))
+            if ddg_results:
+                import re
+                topic_ids = []
+                for item in ddg_results:
+                    href = item.get("href", "")
+                    match = re.search(r"/t/(?:[^/]+/)?(\d+)", href)
+                    if match:
+                        tid = int(match.group(1))
+                        if tid not in topic_ids:
+                            topic_ids.append(tid)
 
-        logger.info(f"[discourse] Search '{query}': {len(results)} results")
-        return results
+                logger.info(f"[discourse] DDG search found topic IDs: {topic_ids}")
+
+                # Fetch posts from the top topics found (limit to top 5 to avoid rate limits)
+                for topic_id in topic_ids[:5]:
+                    try:
+                        topic_posts = await self.get_topic_posts(topic_id, max_posts=15)
+                        results.extend(topic_posts)
+                    except Exception as e:
+                        logger.error(f"[discourse] Failed to fetch posts for topic {topic_id}: {e}")
+
+                if results:
+                    ddg_success = True
+                    logger.info(f"[discourse] DDG search yielded {len(results)} posts")
+        except Exception as e:
+            logger.warning(f"[discourse] DDG search failed: {e}. Falling back to internal search.")
+
+        if not ddg_success:
+            logger.info(f"[discourse] Falling back to internal search for '{query}'")
+            search_query = query
+            if category_slug:
+                search_query += f" category:{category_slug}"
+            if tags:
+                search_query += f" tags:{','.join(tags)}"
+
+            url = f"{self.base_url}/search.json"
+            params = {"q": search_query}
+
+            data = await self._api_get(url, params)
+            if not data:
+                return []
+
+            topics = data.get("topics", [])
+            posts_data = data.get("posts", [])
+
+            # Build topic title lookup
+            topic_titles = {t["id"]: t for t in topics}
+
+            for post_data in posts_data[:limit]:
+                topic_id = post_data.get("topic_id", 0)
+                topic_info = topic_titles.get(topic_id, {})
+
+                created = post_data.get("created_at", "")
+                created_at = None
+                if created:
+                    try:
+                        created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+
+                cooked_html = post_data.get("cooked", "")
+                image_urls = self._extract_images(cooked_html)
+                body = self._strip_html(cooked_html) or post_data.get("blurb", "")
+
+                if not body or len(body) < 10:
+                    continue
+
+                results.append(ForumPost(
+                    id=str(post_data.get("id", "")),
+                    topic_id=topic_id,
+                    title=topic_info.get("title", ""),
+                    body=body,
+                    author=post_data.get("username", ""),
+                    created_at=created_at,
+                    url=f"{self.base_url}/t/{topic_info.get('slug', '')}/{topic_id}/{post_data.get('post_number', 1)}",
+                    forum_name=self.forum_name,
+                    category=str(topic_info.get("category_id", "")),
+                    tags=topic_info.get("tags", []),
+                    post_number=post_data.get("post_number", 1),
+                    like_count=post_data.get("like_count", 0),
+                    image_urls=image_urls,
+                ))
+
+            logger.info(f"[discourse] Internal search '{query}': {len(results)} results")
+
+        # Apply limit to total results
+        return results[:limit]
 
     async def get_topics_by_tag(
         self,

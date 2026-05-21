@@ -38,6 +38,8 @@ async def collect(req: CollectRequest):
             return await _collect_discourse(req)
         elif req.source == "xenforo":
             return await _collect_xenforo(req)
+        elif req.source == "kannapedia":
+            return await _collect_kannapedia(req)
         else:
             return CollectResponse(
                 source=req.source, count=0, items=[],
@@ -272,4 +274,67 @@ async def _collect_xenforo(req: CollectRequest) -> CollectResponse:
 
     items = [_serialize_xenforo_post(p) for p in posts]
     return CollectResponse(source="xenforo", count=len(items), items=items)
+
+
+async def _collect_kannapedia(req: CollectRequest) -> CollectResponse:
+    """Collect strain data from Kannapedia.
+    
+    Two modes:
+      1. rsp_numbers provided → scrape those specific strains
+      2. query provided → search the Kannapedia index for matching strain names,
+         resolve to RSP numbers, then scrape
+    """
+    from app.collectors.kannapedia_collector import KannapediaCollector, _serialize_strain
+    import re
+    import httpx
+
+    collector = KannapediaCollector()
+    rsp_numbers = req.rsp_numbers or []
+
+    # If query is provided but no RSP numbers, search Kannapedia index
+    if req.query and not rsp_numbers:
+        try:
+            async with httpx.AsyncClient(
+                timeout=15,
+                follow_redirects=True,
+                headers={"User-Agent": "CannabisResearcher/1.0 (academic research)"},
+            ) as client:
+                resp = await client.get("https://kannapedia.net/strains")
+                resp.raise_for_status()
+                html = resp.text
+
+            query_lower = req.query.strip().lower()
+            # Match strain entries: <h2 ... data-name="..."> with <a href="/strains/rspXXXXX">
+            for m in re.finditer(
+                r'data-name="([^"]+)"[^>]*>\s*<a\s+href="/strains/(rsp\d+)"',
+                html,
+                re.IGNORECASE,
+            ):
+                strain_name = m.group(1).strip()
+                rsp = m.group(2).strip()
+                if query_lower in strain_name.lower():
+                    rsp_numbers.append(rsp)
+                    if len(rsp_numbers) >= req.limit:
+                        break
+        except Exception as e:
+            logger.error(f"[kannapedia] Failed to search index: {e}")
+            return CollectResponse(
+                source="kannapedia", count=0, items=[],
+                error=f"Failed to search Kannapedia index: {e}",
+            )
+
+    if not rsp_numbers:
+        return CollectResponse(
+            source="kannapedia", count=0, items=[],
+            error="No RSP numbers found. Provide rsp_numbers or a search query.",
+        )
+
+    # Scrape each RSP
+    strains = await collector.get_strains(
+        rsp_numbers[:req.limit],
+        continue_on_error=True,
+    )
+
+    items = [_serialize_strain(s) for s in strains]
+    return CollectResponse(source="kannapedia", count=len(items), items=items)
 

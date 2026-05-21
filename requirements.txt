@@ -39,3 +39,6 @@ structlog>=24.4.0
 # HTTP compat
 urllib3==1.26.18
 chardet==5.2.0
+
+# DDG Search
+ddgs==9.11.4
