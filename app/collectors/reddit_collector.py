@@ -42,6 +42,7 @@ class RedditPost:
     upvote_ratio: float = 0.0
     awards: int = 0
     permalink: str = ""
+    image_urls: list[str] = field(default_factory=list)
 
 
 def _is_quality_post(post: dict, min_score: int = 3, min_comments: int = 2) -> bool:
@@ -51,15 +52,70 @@ def _is_quality_post(post: dict, min_score: int = 3, min_comments: int = 2) -> b
     body = post.get("selftext", "")
     if body in ("[removed]", "[deleted]"):
         return False
-    if post.get("over_18"):
-        return False
+    # Allow NSFW/over_18 posts since this is used for cannabis research
+    # if post.get("over_18"):
+    #     return False
     if post.get("score", 0) < min_score:
         return False
     if post.get("num_comments", 0) < min_comments:
         return False
-    if len(body) < 50 and post.get("score", 0) < 50:
+    # Allow image/gallery posts even if body is short
+    has_image = _has_image_content(post)
+    if min_score > 0 and len(body) < 50 and post.get("score", 0) < 50 and not has_image:
         return False
     return True
+
+
+def _has_image_content(post: dict) -> bool:
+    """Check if a Reddit post contains image/gallery content."""
+    url = post.get("url", "")
+    if any(url.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        return True
+    if "i.redd.it" in url or "i.imgur.com" in url:
+        return True
+    if post.get("is_gallery"):
+        return True
+    if post.get("preview", {}).get("images"):
+        return True
+    return False
+
+
+def _extract_image_urls(post: dict) -> list[str]:
+    """Extract image URLs from a Reddit post (direct links, previews, galleries)."""
+    images = []
+    url = post.get("url", "")
+
+    # Direct image link (i.redd.it, i.imgur.com, etc.)
+    if any(url.endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".gif", ".webp")):
+        images.append(url)
+    elif "i.redd.it" in url:
+        images.append(url)
+    elif "i.imgur.com" in url:
+        images.append(url)
+
+    # Reddit gallery (media_metadata)
+    media_metadata = post.get("media_metadata") or {}
+    for _key, meta in media_metadata.items():
+        if meta.get("status") == "valid" and meta.get("e") == "Image":
+            # Prefer the source (full res) image
+            source = meta.get("s", {})
+            img_url = source.get("u") or source.get("gif") or ""
+            if img_url:
+                # Reddit HTML-encodes preview URLs
+                img_url = img_url.replace("&amp;", "&")
+                images.append(img_url)
+
+    # Reddit preview images (fallback)
+    if not images:
+        preview = post.get("preview", {})
+        for img_data in preview.get("images", []):
+            source = img_data.get("source", {})
+            img_url = source.get("url", "")
+            if img_url:
+                img_url = img_url.replace("&amp;", "&")
+                images.append(img_url)
+
+    return images
 
 
 def _post_to_dataclass(post: dict, subreddit: str) -> RedditPost:
@@ -79,6 +135,7 @@ def _post_to_dataclass(post: dict, subreddit: str) -> RedditPost:
         upvote_ratio=post.get("upvote_ratio", 0.0),
         awards=post.get("total_awards_received", 0),
         permalink=post.get("permalink", ""),
+        image_urls=_extract_image_urls(post),
     )
 
 
@@ -141,60 +198,104 @@ class RedditCollector:
         query: str,
         subreddits: list[str],
         limit: int = 50,
-        time_filter: str = "week",
+        time_filter: str = "all",
     ) -> list[RedditPost]:
         """Full-text search within subreddits.
 
-        Uses Reddit's search API with restrict_sr to stay within specified subs.
+        Uses DuckDuckGo search first to bypass NSFW gates, falls back to Reddit's search API.
         """
         all_posts: list[RedditPost] = []
         seen_ids: set[str] = set()
+        ddg_success = False
 
-        # Build multi-subreddit string for combined search
-        multi_sub = "+".join(subreddits)
+        for sub in subreddits:
+            try:
+                from ddgs import DDGS
+                ddg_query = f"site:reddit.com/r/{sub} {query}"
+                logger.info(f"[reddit] Querying DuckDuckGo: {ddg_query}")
 
-        try:
-            domain = "www.reddit.com"
-            url = f"https://www.reddit.com/r/{multi_sub}/search.json"
-            params = {
-                "q": query,
-                "restrict_sr": "on",
-                "sort": "relevance",
-                "t": time_filter,
-                "limit": limit,
-                "type": "link",
-            }
+                def run_ddg():
+                    with DDGS() as ddgs:
+                        return list(ddgs.text(ddg_query, max_results=limit))
 
-            async with rate_limiter.acquire(domain):
-                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                loop = asyncio.get_running_loop()
+                ddg_results = await loop.run_in_executor(None, run_ddg)
 
-            if r.status_code != 200:
-                logger.warning(f"[reddit] Search HTTP {r.status_code}")
-                return all_posts
+                if ddg_results:
+                    for item in ddg_results:
+                        href = item.get("href", "")
+                        match = re.search(r"(reddit\.com/r/[^/]+/comments/[a-z0-9]+)", href, re.IGNORECASE)
+                        if match:
+                            post_id = match.group(1).split("/")[-1]
+                            if post_id in seen_ids:
+                                continue
+                            seen_ids.add(post_id)
 
-            data = r.json()
-            posts = data.get("data", {}).get("children", [])
+                            json_url = f"https://{match.group(1)}.json"
+                            try:
+                                domain = "www.reddit.com"
+                                async with rate_limiter.acquire(domain):
+                                    r = await session_manager.client.get(json_url, timeout=15.0)
+                                if r.status_code == 200:
+                                    data = r.json()
+                                    if isinstance(data, list) and len(data) > 0:
+                                        post_info = data[0].get("data", {}).get("children", [{}])[0].get("data", {})
+                                        if post_info:
+                                            # Relax quality filters for search (min_score=0, min_comments=0)
+                                            if _is_quality_post(post_info, min_score=0, min_comments=0):
+                                                all_posts.append(_post_to_dataclass(post_info, sub))
+                            except Exception as pe:
+                                logger.warning(f"[reddit] Failed to fetch/parse thread {json_url}: {pe}")
+                    ddg_success = True
+            except Exception as e:
+                logger.warning(f"[reddit] DDG search failed for r/{sub}: {e}. Falling back to native search.")
 
-            for post_wrapper in posts:
-                post = post_wrapper.get("data", {})
-                if not post:
-                    continue
+        if not ddg_success:
+            logger.info(f"[reddit] Falling back to Reddit native search API for '{query}'")
+            # Build multi-subreddit string for combined search
+            multi_sub = "+".join(subreddits)
 
-                post_id = post.get("id", "")
-                if post_id in seen_ids:
-                    continue
-                seen_ids.add(post_id)
+            try:
+                domain = "www.reddit.com"
+                url = f"https://www.reddit.com/r/{multi_sub}/search.json"
+                params = {
+                    "q": query,
+                    "restrict_sr": "on",
+                    "sort": "relevance",
+                    "t": time_filter,
+                    "limit": limit,
+                    "type": "link",
+                    "include_over_18": "on",
+                }
 
-                if not _is_quality_post(post):
-                    continue
+                async with rate_limiter.acquire(domain):
+                    r = await session_manager.client.get(url, params=params, timeout=30.0)
 
-                all_posts.append(_post_to_dataclass(post, post.get("subreddit", multi_sub)))
+                if r.status_code == 200:
+                    data = r.json()
+                    posts = data.get("data", {}).get("children", [])
 
-        except Exception as e:
-            logger.error(f"[reddit] Search error: {e}")
+                    for post_wrapper in posts:
+                        post = post_wrapper.get("data", {})
+                        if not post:
+                            continue
+
+                        post_id = post.get("id", "")
+                        if post_id in seen_ids:
+                            continue
+                        seen_ids.add(post_id)
+
+                        # Relax filters for native search too
+                        if not _is_quality_post(post, min_score=0, min_comments=0):
+                            continue
+
+                        all_posts.append(_post_to_dataclass(post, post.get("subreddit", multi_sub)))
+
+            except Exception as e:
+                logger.error(f"[reddit] Native search error: {e}")
 
         logger.info(f"[reddit] Search '{query}': {len(all_posts)} results")
-        return all_posts
+        return all_posts[:limit]
 
     async def _fetch_subreddit(
         self, subreddit: str, sort: str, time_filter: str, limit: int
@@ -236,4 +337,5 @@ def _serialize_post(post: RedditPost) -> dict:
         "upvote_ratio": post.upvote_ratio,
         "awards": post.awards,
         "permalink": f"https://reddit.com{post.permalink}" if post.permalink else "",
+        "image_urls": post.image_urls,
     }

@@ -71,7 +71,7 @@ async def _collect_reddit(req: CollectRequest) -> CollectResponse:
             query=req.query,
             subreddits=req.subreddits,
             limit=req.limit,
-            time_filter=req.time_filter or "week",
+            time_filter=req.time_filter or "all",
         )
     else:
         # General sweep mode
@@ -171,6 +171,14 @@ async def _collect_discourse(req: CollectRequest) -> CollectResponse:
     )
 
     posts = []
+
+    # If thread_url is provided, extract topic_id from it
+    # URL format: https://overgrow.com/t/the-bank-of-stank/38516/1
+    if req.thread_url and not req.topic_id:
+        import re
+        m = re.search(r'/t/[^/]+/(\d+)', req.thread_url)
+        if m:
+            req.topic_id = int(m.group(1))
 
     if req.topic_id:
         # Get all posts from a specific topic/thread
@@ -303,7 +311,11 @@ async def _collect_kannapedia(req: CollectRequest) -> CollectResponse:
                 resp.raise_for_status()
                 html = resp.text
 
+            import difflib
+
             query_lower = req.query.strip().lower()
+            q_norm = re.sub(r'[^a-z0-9]', '', query_lower)
+            candidates = []
             # Match strain entries: <h2 ... data-name="..."> with <a href="/strains/rspXXXXX">
             for m in re.finditer(
                 r'data-name="([^"]+)"[^>]*>\s*<a\s+href="/strains/(rsp\d+)"',
@@ -312,7 +324,31 @@ async def _collect_kannapedia(req: CollectRequest) -> CollectResponse:
             ):
                 strain_name = m.group(1).strip()
                 rsp = m.group(2).strip()
-                if query_lower in strain_name.lower():
+                s_norm = re.sub(r'[^a-z0-9]', '', strain_name.lower())
+                
+                ratio = difflib.SequenceMatcher(None, q_norm, s_norm).ratio()
+                
+                score = 0
+                if q_norm == s_norm:
+                    score = 100
+                elif s_norm.startswith(q_norm) or q_norm.startswith(s_norm):
+                    score = 90
+                elif q_norm in s_norm or s_norm in q_norm:
+                    score = 80
+                elif ratio >= 0.8:
+                    score = int(ratio * 100)
+                
+                if score > 0:
+                    candidates.append((score, rsp))
+            
+            # Sort candidates by score descending
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            
+            # De-duplicate RSPs while preserving order
+            seen_rsps = set()
+            for score, rsp in candidates:
+                if rsp not in seen_rsps:
+                    seen_rsps.add(rsp)
                     rsp_numbers.append(rsp)
                     if len(rsp_numbers) >= req.limit:
                         break

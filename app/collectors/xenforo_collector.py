@@ -285,36 +285,34 @@ class XenForoCollector:
             ddg_results = await loop.run_in_executor(None, run_ddg)
 
             if ddg_results:
+                thread_urls = []
                 for item in ddg_results:
                     href = item.get("href", "")
-                    title = item.get("title", "")
-                    snippet = item.get("body", "")
-
                     # Extract thread URL
                     match = re.search(r"(.+?/(?:threads|t)/[^/]+?\.?\d+)/?", href)
                     if match:
                         thread_url = match.group(1) + "/"
-                        
-                        # Avoid duplicates
-                        if any(r.url == thread_url for r in results):
-                            continue
+                        if thread_url not in thread_urls:
+                            thread_urls.append(thread_url)
 
-                        results.append(XenForoPost(
-                            id=hashlib.md5(thread_url.encode()).hexdigest()[:12],
-                            thread_id="",
-                            title=title,
-                            body=snippet,
-                            author="Unknown",
-                            created_at=None,
-                            url=thread_url,
-                            forum_name=self.forum_name,
-                            subforum="search",
-                            image_urls=[],
-                        ))
+                logger.info(f"[xenforo] DDG search found thread URLs: {thread_urls}")
+
+                # Fetch posts from the top threads found (up to 5 threads to avoid rate limits)
+                for thread_url in thread_urls[:5]:
+                    if len(results) >= limit:
+                        break
+                    try:
+                        thread_posts = await self.get_thread_posts(
+                            thread_url=thread_url,
+                            max_posts=min(limit - len(results), 15),
+                        )
+                        results.extend(thread_posts)
+                    except Exception as e:
+                        logger.error(f"[xenforo] Failed to fetch posts for thread {thread_url}: {e}")
 
                 if results:
                     ddg_success = True
-                    logger.info(f"[xenforo] DDG search yielded {len(results)} threads")
+                    logger.info(f"[xenforo] DDG search yielded {len(results)} posts")
         except Exception as e:
             logger.warning(f"[xenforo] DDG search failed: {e}. Falling back to internal search.")
 
