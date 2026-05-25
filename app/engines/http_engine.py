@@ -8,6 +8,7 @@ Ported from trading-service SmartClient + news_collector patterns.
 Strips all trading-specific logic — this is pure HTTP fetching.
 """
 
+import json
 import logging
 import re
 from datetime import datetime
@@ -24,11 +25,69 @@ from app.core.session_manager import session_manager
 logger = logging.getLogger(__name__)
 
 
+def _extract_seeking_alpha_ssr(html: str) -> str | None:
+    """Extract and format Seeking Alpha article contents from embedded JSON state."""
+    match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\});?\s*</script>", html, re.DOTALL)
+    if not match:
+        match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\}),?\s*\n", html, re.DOTALL)
+    if not match:
+        return None
+    try:
+        data_str = match.group(1)
+        data = json.loads(data_str)
+        article = data.get("article", {}).get("response", {}).get("data", {}).get("attributes", {})
+        content_html = article.get("content")
+        if content_html:
+            soup = BeautifulSoup(content_html, "html.parser")
+            text = soup.get_text(separator=" ", strip=True)
+            
+            # Extract Quick Insights if available
+            insights = article.get("quickInsights", [])
+            if insights:
+                insights_text = []
+                for ins in sorted(insights, key=lambda x: x.get("order", 0)):
+                    q = ins.get("question", "")
+                    a = ins.get("answer", "")
+                    if q and a:
+                        insights_text.append(f"Q: {q}\nA: {a}")
+                if insights_text:
+                    text = text + "\n\nQuick Insights:\n" + "\n".join(insights_text)
+            return text.strip()
+    except Exception as e:
+        logger.warning(f"Failed to parse Seeking Alpha SSR_DATA: {e}")
+    return None
+
+
+def _clean_html_fallback(html: str, max_chars: int = 15000) -> str:
+    """Fallback utility to strip HTML tags, script blocks, and style blocks using regex."""
+    if not html:
+        return ""
+    # Strip blocks
+    cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<script[^>]*>.*?</script>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<svg[^>]*>.*?</svg>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
+    # Strip individual tags
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    # Normalize spaces
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:max_chars]
+
+
 def _extract_text_from_html(html: str, max_chars: int = 15000) -> str:
     """Extract readable text from HTML using trafilatura (ported from news_collector).
 
     Falls back to BeautifulSoup if trafilatura is not installed or fails.
     """
+    if not html:
+        return ""
+
+    # Seeking Alpha JSON extraction
+    if "seekingalpha" in html.lower() or "ssr_data" in html.lower():
+        sa_text = _extract_seeking_alpha_ssr(html)
+        if sa_text:
+            return sa_text[:max_chars]
+
     # Try trafilatura first (best article extraction)
     try:
         import trafilatura
@@ -77,6 +136,7 @@ class HttpEngine(BaseEngine):
         domain = urlparse(url).netloc
         try:
             async with rate_limiter.acquire(domain):
+                # options is not popped, but we can access headers or cookies here if needed
                 response = await session_manager.client.get(url)
 
             content_type = response.headers.get("content-type", "")
@@ -112,11 +172,13 @@ class HttpEngine(BaseEngine):
 
             # Extract article text
             extracted_text = _extract_text_from_html(html)
+            if not extracted_text:
+                extracted_text = _clean_html_fallback(html)
 
             return ScrapeResult(
                 url=url,
                 success=True,
-                content=extracted_text or html[:15000],
+                content=extracted_text,
                 data=data,
                 error=None,
                 engine_used="http",

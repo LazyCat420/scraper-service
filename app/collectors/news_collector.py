@@ -39,8 +39,68 @@ class NewsArticle:
     source_type: str  # 'rss', 'api', 'scrape'
 
 
+import json
+from bs4 import BeautifulSoup
+
+
+def _extract_seeking_alpha_ssr(html: str) -> str | None:
+    """Extract and format Seeking Alpha article contents from embedded JSON state."""
+    match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\});?\s*</script>", html, re.DOTALL)
+    if not match:
+        match = re.search(r"window\.SSR_DATA\s*=\s*(\{.*?\}),?\s*\n", html, re.DOTALL)
+    if not match:
+        return None
+    try:
+        data_str = match.group(1)
+        data = json.loads(data_str)
+        article = data.get("article", {}).get("response", {}).get("data", {}).get("attributes", {})
+        content_html = article.get("content")
+        if content_html:
+            soup = BeautifulSoup(content_html, "html.parser")
+            text = soup.get_text(separator=" ", strip=True)
+            
+            # Extract Quick Insights if available
+            insights = article.get("quickInsights", [])
+            if insights:
+                insights_text = []
+                for ins in sorted(insights, key=lambda x: x.get("order", 0)):
+                    q = ins.get("question", "")
+                    a = ins.get("answer", "")
+                    if q and a:
+                        insights_text.append(f"Q: {q}\nA: {a}")
+                if insights_text:
+                    text = text + "\n\nQuick Insights:\n" + "\n".join(insights_text)
+            return text.strip()
+    except Exception as e:
+        logger.warning(f"Failed to parse Seeking Alpha SSR_DATA: {e}")
+    return None
+
+
+def _clean_html_fallback(html: str, max_chars: int = 15000) -> str:
+    """Fallback utility to strip HTML tags, script blocks, and style blocks using regex."""
+    if not html:
+        return ""
+    cleaned = re.sub(r"<style[^>]*>.*?</style>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<script[^>]*>.*?</script>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<svg[^>]*>.*?</svg>", "", cleaned, flags=re.DOTALL | re.IGNORECASE)
+    cleaned = re.sub(r"<!--.*?-->", "", cleaned, flags=re.DOTALL)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:max_chars]
+
+
 def _extract_text_from_html(html: str, max_chars: int = 15000) -> str:
     """Extract readable text from HTML using trafilatura."""
+    if not html:
+        return ""
+
+    # Seeking Alpha JSON extraction
+    if "seekingalpha" in html.lower() or "ssr_data" in html.lower():
+        sa_text = _extract_seeking_alpha_ssr(html)
+        if sa_text:
+            return sa_text[:max_chars]
+
+    # Try trafilatura first (best article extraction)
     try:
         import trafilatura
         text = trafilatura.extract(
@@ -66,7 +126,40 @@ def _extract_text_from_html(html: str, max_chars: int = 15000) -> str:
         pass
     except Exception:
         pass
-    return ""
+
+    # Try BeautifulSoup fallback
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ", strip=True)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text and len(text) > 50:
+            # Check quality gate
+            failure_sigs = [
+                "please enable javascript", "please enable cookies",
+                "subscribe to continue", "verify you are human",
+                "pardon our interruption", "are you a robot",
+            ]
+            for sig in failure_sigs:
+                if sig in text.lower():
+                    return ""
+            return text[:max_chars]
+    except Exception:
+        pass
+
+    # Final fallback
+    cleaned = _clean_html_fallback(html, max_chars)
+    # Check quality gate
+    failure_sigs = [
+        "please enable javascript", "please enable cookies",
+        "subscribe to continue", "verify you are human",
+        "pardon our interruption", "are you a robot",
+    ]
+    for sig in failure_sigs:
+        if sig in cleaned.lower():
+            return ""
+    return cleaned
 
 
 async def _scrape_article_body(url: str, max_chars: int = 15000) -> str:
