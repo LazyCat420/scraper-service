@@ -49,6 +49,7 @@ class CollectRequest(BaseModel):
     sort: str | None = None
     time_filter: str | None = None
     days_back: int | None = None
+    require_transcript: bool = True
     # Forum-specific fields
     base_url: str | None = None             # Forum base URL (e.g. https://overgrow.com)
     forum_name: str | None = None           # Display name for the forum

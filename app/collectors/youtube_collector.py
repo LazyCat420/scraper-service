@@ -66,6 +66,7 @@ class YouTubeCollector:
         channel_handle: str,
         max_videos: int = 3,
         days_back: int = 7,
+        require_transcript: bool = True,
     ) -> list[YouTubeVideo]:
         """Get recent videos from a YouTube channel with transcripts."""
         videos_data = await asyncio.to_thread(
@@ -79,12 +80,13 @@ class YouTubeCollector:
         cutoff = datetime.utcnow() - timedelta(days=days_back)
 
         for video in videos_data:
-            vid = await self._process_video(video, channel_handle, cutoff)
+            vid = await self._process_video(video, channel_handle, cutoff, require_transcript)
             if vid:
                 results.append(vid)
-            await asyncio.sleep(1.0)  # Rate limit between transcript fetches
+            if require_transcript:
+                await asyncio.sleep(1.0)  # Rate limit between transcript fetches
 
-        logger.info(f"[youtube] {channel_handle}: {len(results)}/{len(videos_data)} videos with transcripts")
+        logger.info(f"[youtube] {channel_handle}: {len(results)}/{len(videos_data)} videos")
         return results
 
     async def search(
@@ -92,6 +94,7 @@ class YouTubeCollector:
         query: str,
         max_results: int = 10,
         days_back: int = 30,
+        require_transcript: bool = True,
     ) -> list[YouTubeVideo]:
         """Search YouTube for videos matching a query and extract transcripts."""
         videos_data = await asyncio.to_thread(
@@ -108,12 +111,13 @@ class YouTubeCollector:
         cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back > 0 else None
 
         for video in videos_data:
-            vid = await self._process_video(video, video.get("channel", "search"), cutoff)
+            vid = await self._process_video(video, video.get("channel", "search"), cutoff, require_transcript)
             if vid:
                 results.append(vid)
-            await asyncio.sleep(1.0)
+            if require_transcript:
+                await asyncio.sleep(1.0)
 
-        logger.info(f"[youtube] Search '{query}': {len(results)}/{len(videos_data)} with transcripts")
+        logger.info(f"[youtube] Search '{query}': {len(results)}/{len(videos_data)} videos")
         return results
 
     async def _process_video(
@@ -121,6 +125,7 @@ class YouTubeCollector:
         video: dict,
         channel: str,
         cutoff: datetime | None,
+        require_transcript: bool = True,
     ) -> YouTubeVideo | None:
         """Process a single video: check date, get transcript."""
         video_id = video.get("id")
@@ -151,9 +156,11 @@ class YouTubeCollector:
             return None
 
         # Get transcript
-        transcript = await asyncio.to_thread(self._get_transcript, video_id)
-        if not transcript or len(transcript) < 50:
-            return None
+        transcript = ""
+        if require_transcript:
+            transcript = await asyncio.to_thread(self._get_transcript, video_id)
+            if not transcript or len(transcript) < 50:
+                return None
 
         thumbnail_url = video.get("thumbnail") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
 
@@ -200,7 +207,8 @@ class YouTubeCollector:
             return []
 
     def _search_youtube(self, query: str, max_results: int) -> list[dict]:
-        """Use yt-dlp ytsearch to find videos matching a query."""
+        """Use yt-dlp ytsearch to find videos matching a query with DuckDuckGo fallback."""
+        videos = []
         try:
             cmd = [
                 sys.executable, "-m", "yt_dlp",
@@ -211,26 +219,74 @@ class YouTubeCollector:
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
-            if result.returncode != 0:
-                return []
+            if result.returncode == 0 and result.stdout.strip():
+                for line in result.stdout.strip().split("\n"):
+                    if line.strip():
+                        try:
+                            videos.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        except Exception as e:
+            logger.warning(f"[youtube] yt-dlp search failed or timed out: {e}")
 
-            if not result.stdout.strip():
-                return []
+        # If yt-dlp failed or returned no results, fallback to DuckDuckGo Videos Search
+        if not videos:
+            videos = self._search_duckduckgo(query, max_results)
 
+        return videos
+
+    def _search_duckduckgo(self, query: str, max_results: int) -> list[dict]:
+        """Fallback: Search DuckDuckGo Videos and return mapped metadata dicts."""
+        try:
+            from ddgs import DDGS
+            logger.info(f"[youtube] Falling back to DuckDuckGo video search for '{query}'")
+            with DDGS() as ddgs:
+                ddg_results = list(ddgs.videos(query, max_results=max_results))
+            
             videos = []
-            for line in result.stdout.strip().split("\n"):
-                if line.strip():
+            for item in ddg_results:
+                content_url = item.get("content", "")
+                video_id = None
+                if "watch?v=" in content_url:
+                    video_id = content_url.split("watch?v=")[-1].split("&")[0]
+                elif "youtu.be/" in content_url:
+                    video_id = content_url.split("youtu.be/")[-1].split("?")[0]
+                
+                if not video_id:
+                    continue
+                
+                duration_secs = 0
+                duration_str = item.get("duration", "")
+                if duration_str:
+                    parts = duration_str.split(":")
                     try:
-                        videos.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        continue
+                        if len(parts) == 2:
+                            duration_secs = int(parts[0]) * 60 + int(parts[1])
+                        elif len(parts) == 3:
+                            duration_secs = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                    except ValueError:
+                        pass
+                
+                upload_date = ""
+                pub_date = item.get("published", "")
+                if pub_date:
+                    upload_date = pub_date.split("T")[0].replace("-", "")
+                
+                videos.append({
+                    "id": video_id,
+                    "title": item.get("title", ""),
+                    "channel": item.get("uploader", "Unknown"),
+                    "duration": duration_secs,
+                    "thumbnail": item.get("images", {}).get("large", "") or f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
+                    "view_count": item.get("statistics", {}).get("viewCount", 0) or 0,
+                    "upload_date": upload_date,
+                    "original_url": content_url
+                })
+            
+            logger.info(f"[youtube] DuckDuckGo video search retrieved {len(videos)} videos")
             return videos
-
-        except subprocess.TimeoutExpired:
-            logger.warning(f"[youtube] Search timed out for '{query}'")
-            return []
-        except FileNotFoundError:
-            logger.error("[youtube] yt-dlp not found!")
+        except Exception as e:
+            logger.error(f"[youtube] DuckDuckGo fallback search failed: {e}")
             return []
 
     def _get_transcript(self, video_id: str) -> str | None:

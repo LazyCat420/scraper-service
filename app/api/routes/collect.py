@@ -103,6 +103,7 @@ async def _collect_youtube(req: CollectRequest) -> CollectResponse:
                 channel_handle=channel,
                 max_videos=min(req.limit, 10),
                 days_back=req.days_back or 7,
+                require_transcript=req.require_transcript,
             )
             all_videos.extend(videos)
     elif req.query:
@@ -111,6 +112,7 @@ async def _collect_youtube(req: CollectRequest) -> CollectResponse:
             query=req.query,
             max_results=req.limit,
             days_back=req.days_back or 30,
+            require_transcript=req.require_transcript,
         )
     else:
         return CollectResponse(
