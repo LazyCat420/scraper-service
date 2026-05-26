@@ -37,7 +37,7 @@ class BatchRequest(BaseModel):
 # ── Collect Endpoints ──
 
 class CollectRequest(BaseModel):
-    source: Literal["reddit", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia"]
+    source: Literal["reddit", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly"]
     query: str | None = None
     subreddits: list[str] | None = None
     channels: list[str] | None = None

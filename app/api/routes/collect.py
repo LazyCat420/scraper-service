@@ -40,6 +40,8 @@ async def collect(req: CollectRequest):
             return await _collect_xenforo(req)
         elif req.source == "kannapedia":
             return await _collect_kannapedia(req)
+        elif req.source == "leafly":
+            return await _collect_leafly(req)
         else:
             return CollectResponse(
                 source=req.source, count=0, items=[],
@@ -373,4 +375,29 @@ async def _collect_kannapedia(req: CollectRequest) -> CollectResponse:
 
     items = [_serialize_strain(s) for s in strains]
     return CollectResponse(source="kannapedia", count=len(items), items=items)
+
+
+async def _collect_leafly(req: CollectRequest) -> CollectResponse:
+    """Collect strain terpene profile from Leafly."""
+    from app.collectors.leafly_collector import LeaflyCollector
+
+    if not req.query:
+        return CollectResponse(
+            source="leafly", count=0, items=[],
+            error="query is required for leafly collection",
+        )
+
+    collector = LeaflyCollector()
+    data = await collector.get_strain(req.query)
+    
+    if not data:
+        return CollectResponse(
+            source="leafly", count=0, items=[],
+            error=f"No Leafly data found for query: {req.query}",
+        )
+
+    return CollectResponse(
+        source="leafly", count=1, items=[data]
+    )
+
 
