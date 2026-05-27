@@ -229,10 +229,15 @@ class YouTubeCollector:
     def _get_channel_videos(self, channel: str, max_videos: int) -> list[dict]:
         """Use yt-dlp to get recent video metadata from a channel."""
         try:
-            clean_channel = channel.lstrip("@")
+            if channel.startswith("UC") and len(channel) == 24:
+                url = f"https://www.youtube.com/channel/{channel}/videos"
+            else:
+                clean_channel = channel.lstrip("@")
+                url = f"https://www.youtube.com/@{clean_channel}/videos"
+
             cmd = [
                 sys.executable, "-m", "yt_dlp",
-                f"https://www.youtube.com/@{clean_channel}/videos",
+                url,
                 "--flat-playlist", "--dump-json",
                 f"--playlist-end={max_videos}",
                 "--no-download", "--quiet",
