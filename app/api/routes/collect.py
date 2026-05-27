@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from app.api.schemas import CollectRequest, CollectResponse
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/collect", response_model=CollectResponse)
+@router.post("/collect")
 async def collect(req: CollectRequest):
     """Collect data from a specified source.
 
@@ -28,6 +29,12 @@ async def collect(req: CollectRequest):
     comes from the caller — this service has zero domain knowledge.
     """
     try:
+        if req.stream:
+            if req.source == "youtube":
+                return await _collect_youtube_stream(req)
+            else:
+                return await _collect_fallback_stream(req)
+
         if req.source == "reddit":
             return await _collect_reddit(req)
         elif req.source == "youtube":
@@ -108,10 +115,11 @@ async def _collect_youtube(req: CollectRequest) -> CollectResponse:
             all_videos.extend(videos)
     elif req.query:
         # Search mode
+        days_back = req.days_back if req.days_back is not None else 30
         all_videos = await collector.search(
             query=req.query,
             max_results=req.limit,
-            days_back=req.days_back or 30,
+            days_back=days_back,
             require_transcript=req.require_transcript,
         )
     else:
@@ -401,5 +409,72 @@ async def _collect_leafly(req: CollectRequest) -> CollectResponse:
     return CollectResponse(
         source="leafly", count=1, items=[data]
     )
+
+
+async def _collect_youtube_stream(req: CollectRequest) -> StreamingResponse:
+    """Stream YouTube video transcripts or searches as NDJSON."""
+    from app.collectors.youtube_collector import YouTubeCollector, _serialize_video
+    import json
+
+    collector = YouTubeCollector()
+
+    async def event_generator():
+        try:
+            if req.channels:
+                for channel in req.channels:
+                    async for video in collector.collect_channel_generator(
+                        channel_handle=channel,
+                        max_videos=min(req.limit, 10),
+                        days_back=req.days_back or 7,
+                        require_transcript=req.require_transcript,
+                    ):
+                        yield json.dumps(_serialize_video(video)) + "\n"
+            elif req.query:
+                days_back = req.days_back if req.days_back is not None else 30
+                async for video in collector.search_generator(
+                    query=req.query,
+                    max_results=req.limit,
+                    days_back=days_back,
+                    require_transcript=req.require_transcript,
+                ):
+                    yield json.dumps(_serialize_video(video)) + "\n"
+        except Exception as e:
+            logger.error(f"[collect] youtube stream error: {e}", exc_info=True)
+            yield json.dumps({"error": str(e)}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
+    """Fallback: stream items from other collectors one-by-one as NDJSON."""
+    import json
+    async def event_generator():
+        try:
+            if req.source == "reddit":
+                res = await _collect_reddit(req)
+            elif req.source in ("news", "rss"):
+                res = await _collect_news(req)
+            elif req.source == "discourse":
+                res = await _collect_discourse(req)
+            elif req.source == "xenforo":
+                res = await _collect_xenforo(req)
+            elif req.source == "kannapedia":
+                res = await _collect_kannapedia(req)
+            elif req.source == "leafly":
+                res = await _collect_leafly(req)
+            else:
+                yield json.dumps({"error": f"Unknown source: {req.source}"}) + "\n"
+                return
+
+            if res.error:
+                yield json.dumps({"error": res.error}) + "\n"
+            else:
+                for item in res.items:
+                    yield json.dumps(item) + "\n"
+        except Exception as e:
+            logger.error(f"[collect] fallback stream error: {e}", exc_info=True)
+            yield json.dumps({"error": str(e)}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
 
 

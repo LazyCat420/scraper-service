@@ -77,7 +77,7 @@ class YouTubeCollector:
             return []
 
         results: list[YouTubeVideo] = []
-        cutoff = datetime.utcnow() - timedelta(days=days_back)
+        cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
 
         for video in videos_data:
             vid = await self._process_video(video, channel_handle, cutoff, require_transcript)
@@ -88,6 +88,30 @@ class YouTubeCollector:
 
         logger.info(f"[youtube] {channel_handle}: {len(results)}/{len(videos_data)} videos")
         return results
+
+    async def collect_channel_generator(
+        self,
+        channel_handle: str,
+        max_videos: int = 3,
+        days_back: int = 7,
+        require_transcript: bool = True,
+    ):
+        """Yield recent videos from a YouTube channel with transcripts."""
+        videos_data = await asyncio.to_thread(
+            self._get_channel_videos, channel_handle, max_videos
+        )
+
+        if not videos_data:
+            return
+
+        cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
+
+        for video in videos_data:
+            vid = await self._process_video(video, channel_handle, cutoff, require_transcript)
+            if vid:
+                yield vid
+            if require_transcript:
+                await asyncio.sleep(1.0)
 
     async def search(
         self,
@@ -108,7 +132,7 @@ class YouTubeCollector:
         videos_data.sort(key=lambda v: v.get("upload_date", "00000000"), reverse=True)
 
         results: list[YouTubeVideo] = []
-        cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back > 0 else None
+        cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
 
         for video in videos_data:
             vid = await self._process_video(video, video.get("channel", "search"), cutoff, require_transcript)
@@ -119,6 +143,33 @@ class YouTubeCollector:
 
         logger.info(f"[youtube] Search '{query}': {len(results)}/{len(videos_data)} videos")
         return results
+
+    async def search_generator(
+        self,
+        query: str,
+        max_results: int = 10,
+        days_back: int = 30,
+        require_transcript: bool = True,
+    ):
+        """Yield YouTube videos matching a query in real-time."""
+        videos_data = await asyncio.to_thread(
+            self._search_youtube, query, max_results
+        )
+
+        if not videos_data:
+            return
+
+        # Sort newest first
+        videos_data.sort(key=lambda v: v.get("upload_date", "00000000"), reverse=True)
+
+        cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
+
+        for video in videos_data:
+            vid = await self._process_video(video, video.get("channel", "search"), cutoff, require_transcript)
+            if vid:
+                yield vid
+            if require_transcript:
+                await asyncio.sleep(1.0)
 
     async def _process_video(
         self,
