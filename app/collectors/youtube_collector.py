@@ -128,8 +128,7 @@ class YouTubeCollector:
         if not videos_data:
             return []
 
-        # Sort newest first
-        videos_data.sort(key=lambda v: v.get("upload_date", "00000000"), reverse=True)
+        # Keep YouTube relevance order, do not sort by date
 
         results: list[YouTubeVideo] = []
         cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
@@ -159,8 +158,7 @@ class YouTubeCollector:
         if not videos_data:
             return
 
-        # Sort newest first
-        videos_data.sort(key=lambda v: v.get("upload_date", "00000000"), reverse=True)
+        # Keep YouTube relevance order, do not sort by date
 
         cutoff = datetime.utcnow() - timedelta(days=days_back) if days_back and days_back > 0 else None
 
@@ -269,6 +267,7 @@ class YouTubeCollector:
             cmd = [
                 sys.executable, "-m", "yt_dlp",
                 f"ytsearch{max_results}:{query}",
+                "--flat-playlist",
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
                 "--socket-timeout", "15",
