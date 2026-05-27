@@ -109,7 +109,7 @@ async def _collect_youtube(req: CollectRequest) -> CollectResponse:
             videos = await collector.collect_channel(
                 channel_handle=channel,
                 max_videos=min(req.limit, 10),
-                days_back=req.days_back or 7,
+                days_back=req.days_back if req.days_back is not None else 30,
                 require_transcript=req.require_transcript,
             )
             all_videos.extend(videos)
@@ -421,15 +421,18 @@ async def _collect_youtube_stream(req: CollectRequest) -> StreamingResponse:
     async def event_generator():
         try:
             if req.channels:
+                logger.info(f"[collect] YouTube stream started for channels: {req.channels}")
                 for channel in req.channels:
                     async for video in collector.collect_channel_generator(
                         channel_handle=channel,
                         max_videos=min(req.limit, 10),
-                        days_back=req.days_back or 7,
+                        days_back=req.days_back if req.days_back is not None else 30,
                         require_transcript=req.require_transcript,
                     ):
+                        logger.info(f"[collect] Yielding video {video.video_id} for channel {channel}")
                         yield json.dumps(_serialize_video(video)) + "\n"
             elif req.query:
+                logger.info(f"[collect] YouTube stream started for search query: '{req.query}'")
                 days_back = req.days_back if req.days_back is not None else 30
                 async for video in collector.search_generator(
                     query=req.query,
@@ -437,7 +440,9 @@ async def _collect_youtube_stream(req: CollectRequest) -> StreamingResponse:
                     days_back=days_back,
                     require_transcript=req.require_transcript,
                 ):
+                    logger.info(f"[collect] Yielding search result video {video.video_id} for query '{req.query}'")
                     yield json.dumps(_serialize_video(video)) + "\n"
+                logger.info(f"[collect] YouTube stream finished for search query: '{req.query}'")
         except Exception as e:
             logger.error(f"[collect] youtube stream error: {e}", exc_info=True)
             yield json.dumps({"error": str(e)}) + "\n"
