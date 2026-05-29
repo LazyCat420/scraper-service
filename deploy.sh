@@ -17,4 +17,9 @@ PRE_BUILD() {
   fi
 }
 
+EXTRA_SSH_SYNC() {
+  info "Appending environment overrides to remote .env..."
+  ssh "$DEPLOY_SSH_HOST" "echo 'DISABLE_DDG_SEARCH=true' >> '${DEPLOY_COMPOSE_DIR}/.env'"
+}
+
 source "${SCRIPT_DIR}/../deploy-kit/lib.sh"

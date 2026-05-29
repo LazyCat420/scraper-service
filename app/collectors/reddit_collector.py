@@ -204,51 +204,55 @@ class RedditCollector:
 
         Uses DuckDuckGo search first to bypass NSFW gates, falls back to Reddit's search API.
         """
+        import os
         all_posts: list[RedditPost] = []
         seen_ids: set[str] = set()
         ddg_success = False
 
-        for sub in subreddits:
-            try:
-                from ddgs import DDGS
-                ddg_query = f"site:reddit.com/r/{sub} {query}"
-                logger.info(f"[reddit] Querying DuckDuckGo: {ddg_query}")
+        disable_ddg = os.getenv("DISABLE_DDG_SEARCH", "false").lower() == "true"
 
-                def run_ddg():
-                    with DDGS() as ddgs:
-                        return list(ddgs.text(ddg_query, max_results=limit))
+        if not disable_ddg:
+            for sub in subreddits:
+                try:
+                    from ddgs import DDGS
+                    ddg_query = f"site:reddit.com/r/{sub} {query}"
+                    logger.info(f"[reddit] Querying DuckDuckGo: {ddg_query}")
 
-                loop = asyncio.get_running_loop()
-                ddg_results = await loop.run_in_executor(None, run_ddg)
+                    def run_ddg():
+                        with DDGS() as ddgs:
+                            return list(ddgs.text(ddg_query, max_results=limit))
 
-                if ddg_results:
-                    for item in ddg_results:
-                        href = item.get("href", "")
-                        match = re.search(r"(reddit\.com/r/[^/]+/comments/[a-z0-9]+)", href, re.IGNORECASE)
-                        if match:
-                            post_id = match.group(1).split("/")[-1]
-                            if post_id in seen_ids:
-                                continue
-                            seen_ids.add(post_id)
+                    loop = asyncio.get_running_loop()
+                    ddg_results = await loop.run_in_executor(None, run_ddg)
 
-                            json_url = f"https://{match.group(1)}.json"
-                            try:
-                                domain = "www.reddit.com"
-                                async with rate_limiter.acquire(domain):
-                                    r = await session_manager.client.get(json_url, timeout=15.0)
-                                if r.status_code == 200:
-                                    data = r.json()
-                                    if isinstance(data, list) and len(data) > 0:
-                                        post_info = data[0].get("data", {}).get("children", [{}])[0].get("data", {})
-                                        if post_info:
-                                            # Relax quality filters for search (min_score=0, min_comments=0)
-                                            if _is_quality_post(post_info, min_score=0, min_comments=0):
-                                                all_posts.append(_post_to_dataclass(post_info, sub))
-                            except Exception as pe:
-                                logger.warning(f"[reddit] Failed to fetch/parse thread {json_url}: {pe}")
-                    ddg_success = True
-            except Exception as e:
-                logger.warning(f"[reddit] DDG search failed for r/{sub}: {e}. Falling back to native search.")
+                    if ddg_results:
+                        for item in ddg_results:
+                            href = item.get("href", "")
+                            match = re.search(r"(reddit\.com/r/[^/]+/comments/[a-z0-9]+)", href, re.IGNORECASE)
+                            if match:
+                                post_id = match.group(1).split("/")[-1]
+                                if post_id in seen_ids:
+                                    continue
+                                seen_ids.add(post_id)
+
+                                json_url = f"https://{match.group(1)}.json"
+                                try:
+                                    domain = "www.reddit.com"
+                                    async with rate_limiter.acquire(domain):
+                                        r = await session_manager.client.get(json_url, timeout=15.0)
+                                    if r.status_code == 200:
+                                        data = r.json()
+                                        if isinstance(data, list) and len(data) > 0:
+                                            post_info = data[0].get("data", {}).get("children", [{}])[0].get("data", {})
+                                            if post_info:
+                                                # Relax quality filters for search (min_score=0, min_comments=0)
+                                                if _is_quality_post(post_info, min_score=0, min_comments=0):
+                                                    all_posts.append(_post_to_dataclass(post_info, sub))
+                                except Exception as pe:
+                                    logger.warning(f"[reddit] Failed to fetch/parse thread {json_url}: {pe}")
+                        ddg_success = True
+                except Exception as e:
+                    logger.warning(f"[reddit] DDG search failed for r/{sub}: {e}. Falling back to native search.")
 
         if not ddg_success:
             logger.info(f"[reddit] Falling back to Reddit native search API for '{query}'")
