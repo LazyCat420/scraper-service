@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routes import collect, health, scrape
+from app.api.routes import collect, health, scrape, stream
 from app.core.session_manager import session_manager
 
 # Configure logging
@@ -45,6 +45,7 @@ app = FastAPI(
 
 app.include_router(scrape.router, tags=["Scraping"])
 app.include_router(collect.router, tags=["Collection"])
+app.include_router(stream.router, tags=["Streaming"])
 app.include_router(health.router, tags=["Health"])
 
 
