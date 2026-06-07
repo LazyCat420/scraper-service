@@ -395,34 +395,12 @@ class XenForoCollector:
             try:
                 from app.engines.playwright_engine import PlaywrightEngine
                 engine = PlaywrightEngine()
-                result = await engine.fetch(url, {"wait_for": ".structItem, article.message"})
+                result = await engine.fetch(url, {
+                    "wait_for": ".structItem, article.message",
+                    "raw_html": True
+                })
                 if result.success and result.content:
-                    # We need raw HTML, not extracted text
-                    # Re-fetch with raw HTML option
-                    from playwright.async_api import async_playwright
-                    import random
-
-                    async with rate_limiter.acquire(domain):
-                        async with async_playwright() as p:
-                            browser = await p.chromium.launch(
-                                headless=True,
-                                args=["--disable-blink-features=AutomationControlled"],
-                            )
-                            context = await browser.new_context(
-                                viewport={"width": 1280, "height": 900 + random.randint(0, 50)},
-                                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            )
-                            page = await context.new_page()
-                            try:
-                                from playwright_stealth import stealth_async
-                                await stealth_async(page)
-                            except Exception as stealth_err:
-                                logger.warning(f"[xenforo] Failed to apply stealth in fallback: {stealth_err}")
-                            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                            await page.wait_for_timeout(2000)
-                            html = await page.content()
-                            await browser.close()
-                            return html
+                    return result.content
             except Exception as e:
                 logger.error(f"[xenforo] Playwright fallback failed: {e}")
 
