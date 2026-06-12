@@ -239,6 +239,7 @@ class YouTubeCollector:
                 "--flat-playlist", "--dump-json",
                 f"--playlist-end={max_videos}",
                 "--no-download", "--quiet",
+                "--extractor-args", "youtubetab:approximate_date",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
@@ -271,6 +272,7 @@ class YouTubeCollector:
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
                 "--socket-timeout", "15",
+                "--extractor-args", "youtubetab:approximate_date",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
