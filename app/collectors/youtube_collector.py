@@ -119,10 +119,11 @@ class YouTubeCollector:
         max_results: int = 10,
         days_back: int = 30,
         require_transcript: bool = True,
+        sort: str | None = None,
     ) -> list[YouTubeVideo]:
         """Search YouTube for videos matching a query and extract transcripts."""
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results
+            self._search_youtube, query, max_results, sort
         )
 
         if not videos_data:
@@ -149,10 +150,11 @@ class YouTubeCollector:
         max_results: int = 10,
         days_back: int = 30,
         require_transcript: bool = True,
+        sort: str | None = None,
     ):
         """Yield YouTube videos matching a query in real-time."""
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results
+            self._search_youtube, query, max_results, sort
         )
 
         if not videos_data:
@@ -261,13 +263,14 @@ class YouTubeCollector:
             logger.error(f"[youtube] yt-dlp error for {channel}: {e}")
             return []
 
-    def _search_youtube(self, query: str, max_results: int) -> list[dict]:
+    def _search_youtube(self, query: str, max_results: int, sort: str | None = None) -> list[dict]:
         """Use yt-dlp ytsearch to find videos matching a query with DuckDuckGo fallback."""
         videos = []
+        search_prefix = "ytsearchdate" if sort == "date" else "ytsearch"
         try:
             cmd = [
                 sys.executable, "-m", "yt_dlp",
-                f"ytsearch{max_results}:{query}",
+                f"{search_prefix}{max_results}:{query}",
                 "--flat-playlist",
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
