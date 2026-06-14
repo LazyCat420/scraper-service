@@ -76,7 +76,24 @@ async def _extract_stream_url(video_id: str) -> dict:
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE", "")
-    has_cookies = cookies_file and os.path.exists(cookies_file)
+    has_cookies = False
+    if cookies_file and os.path.exists(cookies_file):
+        # Only use cookies if the file is non-empty and looks like a valid
+        # Netscape format cookies file. An empty or malformed file causes
+        # yt-dlp to error out immediately on every request.
+        try:
+            size = os.path.getsize(cookies_file)
+            if size > 0:
+                with open(cookies_file, "r") as f:
+                    first_line = f.readline().strip()
+                if first_line.startswith("# Netscape HTTP Cookie File") or first_line.startswith("# HTTP Cookie File"):
+                    has_cookies = True
+                else:
+                    logger.warning(f"[stream] Cookies file exists but is not Netscape format (first line: {first_line[:60]}), ignoring")
+            else:
+                logger.warning("[stream] Cookies file exists but is empty, ignoring")
+        except Exception as e:
+            logger.warning(f"[stream] Error reading cookies file: {e}, ignoring")
 
     # Strategy: try combined mp4 first (plays in <video> without JS),
     # then fall back to best available format
