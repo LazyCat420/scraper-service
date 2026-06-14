@@ -49,6 +49,8 @@ async def collect(req: CollectRequest):
             return await _collect_kannapedia(req)
         elif req.source == "leafly":
             return await _collect_leafly(req)
+        elif req.source == "duckduckgo":
+            return await _collect_duckduckgo(req)
         else:
             return CollectResponse(
                 source=req.source, count=0, items=[],
@@ -412,6 +414,26 @@ async def _collect_leafly(req: CollectRequest) -> CollectResponse:
     )
 
 
+async def _collect_duckduckgo(req: CollectRequest) -> CollectResponse:
+    """Collect search results from DuckDuckGo."""
+    from app.collectors.duckduckgo_collector import DuckDuckGoCollector
+
+    if not req.query:
+        return CollectResponse(
+            source="duckduckgo", count=0, items=[],
+            error="query is required for duckduckgo collection",
+        )
+
+    collector = DuckDuckGoCollector()
+    results = await collector.search(
+        query=req.query,
+        limit=req.limit,
+        date_restrict=req.time_filter, # Optional parameter mapping
+    )
+
+    return CollectResponse(source="duckduckgo", count=len(results), items=results)
+
+
 async def _collect_youtube_stream(req: CollectRequest) -> StreamingResponse:
     """Stream YouTube video transcripts or searches as NDJSON."""
     from app.collectors.youtube_collector import YouTubeCollector, _serialize_video
@@ -469,6 +491,8 @@ async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
                 res = await _collect_kannapedia(req)
             elif req.source == "leafly":
                 res = await _collect_leafly(req)
+            elif req.source == "duckduckgo":
+                res = await _collect_duckduckgo(req)
             else:
                 yield json.dumps({"error": f"Unknown source: {req.source}"}) + "\n"
                 return
