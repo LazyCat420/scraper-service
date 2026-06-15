@@ -46,6 +46,7 @@ class CollectRequest(BaseModel):
     keywords: list[str] | None = None
     usernames: list[str] | None = None     # Twitter users to scrape
     cashtags: list[str] | None = None      # Twitter $AAPL-style cashtags
+    symbol: str | None = None              # StockTwits symbol
     limit: int = Field(default=50, ge=1, le=1000)
     from_date: str | None = None
     sort: str | None = None

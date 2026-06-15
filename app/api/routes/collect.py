@@ -566,8 +566,15 @@ async def _collect_twitter(req: CollectRequest) -> CollectResponse:
 
 
 async def _collect_stocktwits(req: CollectRequest) -> CollectResponse:
-    """Collect StockTwits messages (Placeholder)."""
-    return CollectResponse(source="stocktwits", count=0, items=[], error="StockTwits collector not implemented yet")
+    """Collect StockTwits messages."""
+    from app.collectors.stocktwits_collector import StockTwitsCollector, _serialize_message
+    if not req.symbol:
+        return CollectResponse(source="stocktwits", count=0, items=[], error="Field 'symbol' is required for StockTwits collection")
+    
+    collector = StockTwitsCollector()
+    messages = await collector.get_symbol_stream(req.symbol, limit=req.limit or 30)
+    items = [_serialize_message(m) for m in messages]
+    return CollectResponse(source="stocktwits", count=len(items), items=items)
 
 
 
