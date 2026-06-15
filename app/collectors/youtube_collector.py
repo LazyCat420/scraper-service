@@ -418,9 +418,23 @@ class YouTubeCollector:
             from youtube_transcript_api import YouTubeTranscriptApi
             import os
 
+            import requests
+            from http.cookiejar import MozillaCookieJar
+
+            session = None
             cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE", "")
             if cookies_file and os.path.exists(cookies_file):
-                ytt = YouTubeTranscriptApi(cookie_path=cookies_file)
+                session = requests.Session()
+                cj = MozillaCookieJar(cookies_file)
+                try:
+                    cj.load(ignore_discard=True, ignore_expires=True)
+                    session.cookies = cj
+                except Exception as ce:
+                    logger.warning(f"[youtube] Failed to load cookie file {cookies_file}: {ce}")
+                    session = None
+
+            if session:
+                ytt = YouTubeTranscriptApi(http_client=session)
             else:
                 ytt = YouTubeTranscriptApi()
 
