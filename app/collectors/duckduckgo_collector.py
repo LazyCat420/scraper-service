@@ -92,7 +92,7 @@ class DuckDuckGoCollector:
 
         options = {
             "raw_html": True,
-            "wait_for": ".result__results"
+            "wait_for": ".result"
         }
         
         try:
@@ -114,17 +114,17 @@ class DuckDuckGoCollector:
             if len(results) >= limit:
                 break
                 
-            title_a = result_div.select_first(".result__a")
+            title_a = result_div.select_one(".result__a")
             if not title_a:
                 continue
                 
             raw_title = title_a.get_text(strip=True)
             raw_href = title_a.get("href", "")
             
-            snippet_elem = result_div.select_first(".result__snippet")
+            snippet_elem = result_div.select_one(".result__snippet")
             raw_snippet = snippet_elem.get_text(strip=True) if snippet_elem else ""
             
-            url_elem = result_div.select_first(".result__url")
+            url_elem = result_div.select_one(".result__url")
             raw_display_url = url_elem.get_text(strip=True) if url_elem else ""
             
             resolved_url = self._decode_redirect_url(raw_href)

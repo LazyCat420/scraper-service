@@ -291,20 +291,16 @@ class RedditCollector:
         if not disable_ddg:
             for sub in subreddits:
                 try:
-                    from ddgs import DDGS
+                    from app.collectors.duckduckgo_collector import DuckDuckGoCollector
                     ddg_query = f"site:reddit.com/r/{sub} {query}"
                     logger.info(f"[reddit] Querying DuckDuckGo: {ddg_query}")
 
-                    def run_ddg():
-                        with DDGS() as ddgs:
-                            return list(ddgs.text(ddg_query, max_results=limit))
-
-                    loop = asyncio.get_running_loop()
-                    ddg_results = await loop.run_in_executor(None, run_ddg)
+                    collector = DuckDuckGoCollector()
+                    ddg_results = await collector.search(ddg_query, limit=limit)
 
                     if ddg_results:
                         for item in ddg_results:
-                            href = item.get("href", "")
+                            href = item.get("url", "")
                             match = re.search(r"(reddit\.com/r/[^/]+/comments/[a-z0-9]+)", href, re.IGNORECASE)
                             if match:
                                 post_id = match.group(1).split("/")[-1]

@@ -123,8 +123,8 @@ class PlaywrightEngine(BaseEngine):
 
                     # Apply stealth to bypass Cloudflare
                     try:
-                        from playwright_stealth import stealth_async
-                        await stealth_async(page)
+                        from playwright_stealth import Stealth
+                        await Stealth().apply_stealth_async(page)
                     except Exception as stealth_err:
                         logger.warning(f"[playwright] Failed to apply stealth: {stealth_err}")
 
