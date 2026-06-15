@@ -37,13 +37,15 @@ class BatchRequest(BaseModel):
 # ── Collect Endpoints ──
 
 class CollectRequest(BaseModel):
-    source: Literal["reddit", "reddit-purge", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo"]
+    source: Literal["reddit", "reddit-purge", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo", "twitter", "stocktwits"]
     query: str | None = None
     subreddits: list[str] | None = None
     channels: list[str] | None = None
     feed_url: str | None = None
     feeds: dict[str, str] | None = None    # {feed_name: feed_url} for multi-feed
     keywords: list[str] | None = None
+    usernames: list[str] | None = None     # Twitter users to scrape
+    cashtags: list[str] | None = None      # Twitter $AAPL-style cashtags
     limit: int = Field(default=50, ge=1, le=1000)
     from_date: str | None = None
     sort: str | None = None

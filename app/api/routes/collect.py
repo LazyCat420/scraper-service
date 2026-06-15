@@ -53,6 +53,10 @@ async def collect(req: CollectRequest):
             return await _collect_leafly(req)
         elif req.source == "duckduckgo":
             return await _collect_duckduckgo(req)
+        elif req.source == "twitter":
+            return await _collect_twitter(req)
+        elif req.source == "stocktwits":
+            return await _collect_stocktwits(req)
         else:
             return CollectResponse(
                 source=req.source, count=0, items=[],
@@ -517,6 +521,10 @@ async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
                 res = await _collect_leafly(req)
             elif req.source == "duckduckgo":
                 res = await _collect_duckduckgo(req)
+            elif req.source == "twitter":
+                res = await _collect_twitter(req)
+            elif req.source == "stocktwits":
+                res = await _collect_stocktwits(req)
             else:
                 yield json.dumps({"error": f"Unknown source: {req.source}"}) + "\n"
                 return
@@ -531,5 +539,35 @@ async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
             yield json.dumps({"error": str(e)}) + "\n"
 
     return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+async def _collect_twitter(req: CollectRequest) -> CollectResponse:
+    """Collect tweets using twscrape."""
+    from app.collectors.twitter_collector import TwitterCollector, _serialize_tweet
+    collector = TwitterCollector()
+    tweets = []
+    
+    if req.cashtags:
+        for tag in req.cashtags:
+            results = await collector.get_cashtag_feed(tag, limit=req.limit)
+            tweets.extend(results)
+    elif req.usernames:
+        for username in req.usernames:
+            results = await collector.get_user_tweets(username, limit=req.limit)
+            tweets.extend(results)
+    elif req.query:
+        tweets = await collector.search(req.query, limit=req.limit)
+    else:
+        return CollectResponse(source="twitter", count=0, items=[], 
+                              error="One of 'cashtags', 'usernames', or 'query' is required")
+    
+    items = [_serialize_tweet(t) for t in tweets]
+    return CollectResponse(source="twitter", count=len(items), items=items)
+
+
+async def _collect_stocktwits(req: CollectRequest) -> CollectResponse:
+    """Collect StockTwits messages (Placeholder)."""
+    return CollectResponse(source="stocktwits", count=0, items=[], error="StockTwits collector not implemented yet")
+
 
 

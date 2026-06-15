@@ -44,3 +44,6 @@ chardet==5.2.0
 
 # DDG Search
 ddgs==9.11.4
+
+# Twitter/X scraping
+twscrape>=0.12.0

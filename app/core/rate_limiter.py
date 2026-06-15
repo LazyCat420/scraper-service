@@ -15,6 +15,12 @@ DOMAIN_LIMITS: dict[str, float] = {
     "pubmed.ncbi.nlm.nih.gov": 0.5,
     "feeds.marketwatch.com": 1.0,
     "search.cnbc.com": 1.0,
+    "twitter.com": 0.2,
+    "x.com": 0.2,
+    "api.llama.fi": 1.0,
+    "api.stlouisfed.org": 0.5,
+    "api.worldbank.org": 1.0,
+    "openinsider.com": 0.3,
 }
 DEFAULT_RATE = 1.0  # 1 req/s for unknown domains
 
