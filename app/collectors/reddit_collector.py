@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+import feedparser
+from bs4 import BeautifulSoup
 
 from app.core.rate_limiter import rate_limiter
 from app.core.session_manager import session_manager
@@ -137,6 +139,63 @@ def _post_to_dataclass(post: dict, subreddit: str) -> RedditPost:
         permalink=post.get("permalink", ""),
         image_urls=_extract_image_urls(post),
     )
+
+
+def _parse_rss_entry(entry: dict, subreddit: str) -> dict:
+    """Parse feedparser RSS entry into a standardized Reddit post dict."""
+    entry_id = entry.get("id", "")
+    if "t3_" in entry_id:
+        post_id = entry_id.split("t3_")[-1]
+    else:
+        post_id = entry_id.split("/")[-2] if entry_id.endswith("/") else entry_id.split("/")[-1]
+        
+    author = entry.get("author", "").replace("/u/", "").strip()
+    
+    summary_html = entry.get("summary") or ""
+    soup = BeautifulSoup(summary_html, "html.parser")
+    
+    # Extract clean paragraph texts
+    paragraphs = []
+    for p in soup.find_all("p"):
+        p_text = p.get_text().strip()
+        if p_text and not p_text.startswith("[link]") and not p_text.startswith("[comments]"):
+            paragraphs.append(p_text)
+    body = "\n".join(paragraphs)
+    
+    # Created time
+    updated_str = entry.get("updated")
+    created_utc = 0
+    if updated_str:
+        try:
+            # Parse ISO-8601 format
+            dt = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+            created_utc = dt.timestamp()
+        except Exception:
+            pass
+            
+    # Extract images from HTML
+    image_urls = []
+    for img in soup.find_all("img"):
+        src = img.get("src")
+        if src:
+            image_urls.append(src)
+            
+    return {
+        "id": post_id,
+        "title": entry.get("title", ""),
+        "selftext": body,
+        "score": 100,  # Default to pass min_score quality filter
+        "num_comments": 10,  # Default to pass min_comments quality filter
+        "url": entry.get("link", ""),
+        "subreddit": subreddit,
+        "created_utc": created_utc,
+        "author": author,
+        "link_flair_text": None,
+        "upvote_ratio": 1.0,
+        "total_awards_received": 0,
+        "permalink": entry.get("link", "").replace("https://www.reddit.com", "").replace("https://reddit.com", ""),
+        "image_urls": image_urls
+    }
 
 
 class RedditCollector:
@@ -294,35 +353,122 @@ class RedditCollector:
                             continue
 
                         all_posts.append(_post_to_dataclass(post, post.get("subreddit", multi_sub)))
+                else:
+                    logger.warning(f"[reddit] Native search JSON HTTP {r.status_code}. Trying RSS search...")
+                    rss_posts = await self._search_rss(query, subreddits, limit, time_filter)
+                    all_posts.extend(rss_posts)
 
             except Exception as e:
-                logger.error(f"[reddit] Native search error: {e}")
+                logger.error(f"[reddit] Native search error: {e}. Trying RSS search...")
+                rss_posts = await self._search_rss(query, subreddits, limit, time_filter)
+                all_posts.extend(rss_posts)
+
+        if not all_posts:
+            logger.info(f"[reddit] No posts collected via DDG/JSON. Trying native RSS search fallback...")
+            all_posts = await self._search_rss(query, subreddits, limit, time_filter)
 
         logger.info(f"[reddit] Search '{query}': {len(all_posts)} results")
         return all_posts[:limit]
 
+    async def _search_rss(
+        self, query: str, subreddits: list[str], limit: int, time_filter: str
+    ) -> list[RedditPost]:
+        """Search subreddits using public RSS/Atom search endpoint."""
+        domain = "www.reddit.com"
+        multi_sub = "+".join(subreddits)
+        url = f"https://www.reddit.com/r/{multi_sub}/search.rss"
+        params = {
+            "q": query,
+            "restrict_sr": "on",
+            "sort": "relevance",
+            "t": time_filter,
+            "limit": limit
+        }
+        
+        logger.info(f"[reddit] RSS search fetch: {url} with params {params}")
+        try:
+            async with rate_limiter.acquire(domain):
+                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                
+            if r.status_code != 200:
+                logger.error(f"[reddit] RSS search HTTP error: {r.status_code}")
+                return []
+                
+            feed = feedparser.parse(r.text)
+            all_posts = []
+            for entry in feed.entries[:limit]:
+                try:
+                    parsed_dict = _parse_rss_entry(entry, subreddits[0] if len(subreddits) == 1 else "multi")
+                    all_posts.append(_post_to_dataclass(parsed_dict, parsed_dict["subreddit"]))
+                except Exception as pe:
+                    logger.warning(f"[reddit] Failed to parse RSS search entry: {pe}")
+            return all_posts
+        except Exception as e:
+            logger.error(f"[reddit] RSS search error: {e}")
+            return []
+
     async def _fetch_subreddit(
         self, subreddit: str, sort: str, time_filter: str, limit: int
     ) -> list[dict]:
-        """Fetch posts from a single subreddit using public JSON API."""
+        """Fetch posts from a single subreddit using public JSON API, with RSS fallback."""
         domain = "www.reddit.com"
         url = f"https://www.reddit.com/r/{subreddit}/{sort}.json"
         params = {"t": time_filter, "limit": limit}
 
-        async with rate_limiter.acquire(domain):
-            r = await session_manager.client.get(url, params=params, timeout=30.0)
+        try:
+            async with rate_limiter.acquire(domain):
+                r = await session_manager.client.get(url, params=params, timeout=30.0)
 
-        if r.status_code == 429:
-            logger.warning(f"[reddit] r/{subreddit}: rate limited")
+            if r.status_code == 429:
+                logger.warning(f"[reddit] r/{subreddit} JSON rate limited. Trying RSS fallback...")
+                return await self._fetch_subreddit_rss(subreddit, sort, time_filter, limit)
+
+            if r.status_code != 200:
+                logger.warning(f"[reddit] r/{subreddit} JSON HTTP {r.status_code}. Trying RSS fallback...")
+                return await self._fetch_subreddit_rss(subreddit, sort, time_filter, limit)
+
+            data = r.json()
+            children = data.get("data", {}).get("children", [])
+            return [c.get("data", {}) for c in children if c.get("data")]
+        except Exception as e:
+            logger.warning(f"[reddit] r/{subreddit} JSON error: {e}. Trying RSS fallback...")
+            return await self._fetch_subreddit_rss(subreddit, sort, time_filter, limit)
+
+    async def _fetch_subreddit_rss(
+        self, subreddit: str, sort: str, time_filter: str, limit: int
+    ) -> list[dict]:
+        """Fetch posts from a single subreddit using public RSS/Atom API."""
+        domain = "www.reddit.com"
+        
+        # Determine RSS URL
+        if sort == "hot" or not sort:
+            url = f"https://www.reddit.com/r/{subreddit}/.rss"
+        else:
+            url = f"https://www.reddit.com/r/{subreddit}/{sort}/.rss"
+            
+        params = {"t": time_filter, "limit": limit}
+        
+        logger.info(f"[reddit] r/{subreddit} RSS fallback fetch: {url}")
+        try:
+            async with rate_limiter.acquire(domain):
+                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                
+            if r.status_code != 200:
+                logger.error(f"[reddit] r/{subreddit} RSS fallback HTTP error: {r.status_code}")
+                return []
+                
+            feed = feedparser.parse(r.text)
+            posts = []
+            for entry in feed.entries[:limit]:
+                try:
+                    parsed_post = _parse_rss_entry(entry, subreddit)
+                    posts.append(parsed_post)
+                except Exception as pe:
+                    logger.warning(f"[reddit] Failed to parse RSS entry: {pe}")
+            return posts
+        except Exception as e:
+            logger.error(f"[reddit] r/{subreddit} RSS fallback error: {e}")
             return []
-
-        if r.status_code != 200:
-            logger.warning(f"[reddit] r/{subreddit}: HTTP {r.status_code}")
-            return []
-
-        data = r.json()
-        children = data.get("data", {}).get("children", [])
-        return [c.get("data", {}) for c in children if c.get("data")]
 
 
 def _serialize_post(post: RedditPost) -> dict:
