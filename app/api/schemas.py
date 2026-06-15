@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 class ScrapeRequest(BaseModel):
     url: str
-    engine: Literal["http", "playwright", "crawl4ai", "vision"] = "http"
+    engine: Literal["http", "playwright", "crawl4ai", "vision", "auto"] = "http"
     extract: dict[str, str] | None = None   # {field_name: css_selector}
     options: dict[str, Any] = Field(default_factory=dict)
 

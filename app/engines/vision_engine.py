@@ -97,68 +97,61 @@ async def _capture_screenshots(url: str, max_screenshots: int = 5) -> list[bytes
 
 
 async def _ocr_with_openai(screenshots: list[bytes], prompt: str) -> str | None:
-    """Send screenshots to OpenAI-compatible VLM for OCR."""
+    """Send screenshots to Prism VLM for OCR."""
     import httpx
 
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    ollama_url = os.getenv("OLLAMA_URL", "")
     prism_url = os.getenv("PRISM_URL", "http://prism-service:7777/agent")
+    base_url = prism_url
+    if base_url.endswith("/agent"):
+        base_url = base_url[:-6] + "/chat"
+    elif "/chat" not in base_url and "/v1" not in base_url:
+        if base_url.endswith("/"):
+            base_url += "chat"
+        else:
+            base_url += "/chat"
+            
+    if "?stream=false" not in base_url:
+        base_url += "?stream=false"
+    headers = {"Content-Type": "application/json"}
     
-    is_prism = False
+    model = os.getenv("VISION_MODEL", "openai/gpt-4o")
+    provider = "openai"
+    resolved_model = model
+    if "/" in model:
+        parts = model.split("/", 1)
+        provider = parts[0]
+        resolved_model = parts[1]
 
-    if ollama_url:
-        base_url = f"{ollama_url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json"}
-        model = os.getenv("VISION_MODEL", "llava")
-    elif api_key:
-        base_url = "https://api.openai.com/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        model = os.getenv("VISION_MODEL", "gpt-4o-mini")
-    elif prism_url:
-        base_url = prism_url
-        if "?stream=false" not in base_url:
-            base_url += "?stream=false"
-        headers = {"Content-Type": "application/json"}
-        model = os.getenv("VISION_MODEL", "openai/gpt-4o")
-        is_prism = True
-    else:
-        return None
-
-    content = []
+    images = []
     for img_bytes in screenshots:
         b64 = base64.b64encode(img_bytes).decode("utf-8")
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+        images.append(f"data:image/png;base64,{b64}")
 
-    content.append({"type": "text", "text": prompt or (
+    prompt_text = prompt or (
         "These are screenshots of a web page. Read ALL text visible in the images "
         "and return the complete text content. Return ONLY the text, no commentary."
-    )})
+    )
 
     payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": content}],
+        "provider": provider,
+        "model": resolved_model,
+        "messages": [{"role": "user", "content": prompt_text, "images": images}],
         "temperature": 0.1,
+        "maxTokens": 4096,
+        "skipConversation": True,
     }
-    
-    if is_prism:
-        payload["maxTokens"] = 4096
-    else:
-        payload["max_tokens"] = 4096
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         r = await client.post(base_url, json=payload, headers=headers)
         r.raise_for_status()
         data = r.json()
         
-        if is_prism:
-            raw = data.get("response") or data.get("content") or data.get("text")
-            if not raw and data.get("messages"):
-                msgs = data.get("messages", [])
-                if msgs and msgs[-1].get("role") == "assistant":
-                    raw = msgs[-1].get("content")
-            text = str(raw) if raw else ""
-        else:
-            text = data["choices"][0]["message"]["content"]
+        raw = data.get("response") or data.get("content") or data.get("text")
+        if not raw and data.get("messages"):
+            msgs = data.get("messages", [])
+            if msgs and msgs[-1].get("role") == "assistant":
+                raw = msgs[-1].get("content")
+        text = str(raw) if raw else ""
             
         return text if len(text) > 100 else None
 

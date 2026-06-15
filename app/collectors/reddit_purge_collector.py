@@ -119,13 +119,36 @@ class RedditPurgeCollector:
             logger.warning(f"[reddit-purge] Failed to fetch thread details for {permalink}: {e}")
             return "", "", []
 
-    async def filter_candidates_with_llm(self, candidates: list[dict], ollama_host: str, ollama_model: str) -> list[dict]:
+    async def filter_candidates_with_llm(self, candidates: list[dict], ollama_host: str | None = None, ollama_model: str | None = None) -> list[dict]:
         if not candidates:
             return []
         
         # Batch by 20 to avoid massive prompt sizes
         selected = []
         batch_size = 20
+        
+        prism_url = os.getenv("PRISM_URL", "http://prism-service:7777/agent")
+        base_url = prism_url
+        if base_url.endswith("/agent"):
+            base_url = base_url[:-6] + "/chat"
+        elif "/chat" not in base_url and "/v1" not in base_url:
+            if base_url.endswith("/"):
+                base_url += "chat"
+            else:
+                base_url += "/chat"
+                
+        if "?stream=false" not in base_url:
+            base_url += "?stream=false"
+        headers = {"Content-Type": "application/json"}
+        
+        model = ollama_model or os.getenv("PURGE_MODEL", "vllm/cyankiwi/Qwen3.6-35B-A3B-AWQ-4bit")
+        provider = "vllm"
+        resolved_model = model
+        if "/" in model:
+            parts = model.split("/", 1)
+            provider = parts[0]
+            resolved_model = parts[1]
+
         for i in range(0, len(candidates), batch_size):
             batch = candidates[i:i+batch_size]
             titles_text = "\n".join([f"{idx}. {p['title']} (r/{p['subreddit']})" for idx, p in enumerate(batch)])
@@ -139,17 +162,25 @@ TITLES:
 
 Output ONLY a JSON list of indexes: [0, 5, 2]
 """
-            url = f"{ollama_host}/api/chat"
             payload = {
-                "model": ollama_model,
+                "provider": provider,
+                "model": resolved_model,
                 "messages": [{"role": "user", "content": prompt}],
-                "stream": False
+                "temperature": 0.1,
+                "maxTokens": 1024,
+                "skipConversation": True,
             }
             try:
-                r = await session_manager.client.post(url, json=payload, timeout=60.0)
+                r = await session_manager.client.post(base_url, json=payload, headers=headers, timeout=60.0)
                 if r.status_code == 200:
                     resp_data = r.json()
-                    content = resp_data.get("message", {}).get("content", "").strip()
+                    content = ""
+                    if isinstance(resp_data, dict):
+                        if "text" in resp_data:
+                            content = resp_data["text"]
+                        elif "response" in resp_data and isinstance(resp_data["response"], dict):
+                            content = resp_data["response"].get("text", "")
+                    content = content.strip() if content else ""
                     if "```" in content:
                         content = content.split("```")[1].strip()
                         if content.startswith("json"):
@@ -160,7 +191,7 @@ Output ONLY a JSON list of indexes: [0, 5, 2]
                             if 0 <= idx < len(batch):
                                 selected.append(batch[idx])
             except Exception as e:
-                logger.warning(f"[reddit-purge] Ollama model filtering failed: {e}")
+                logger.warning(f"[reddit-purge] Prism filtering failed: {e}")
                 # Fallback to including all of them if LLM fails
                 return candidates
 

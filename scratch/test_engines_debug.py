@@ -1,25 +1,28 @@
 import asyncio
 import os
 import sys
+import logging
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# Configure verbose logging to stdout
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 from app.engines.http_engine import HttpEngine
 from app.engines.playwright_engine import PlaywrightEngine
 from app.engines.crawl4ai_engine import Crawl4aiEngine
-from app.engines.auto_engine import AutoEngine
 from app.core.session_manager import session_manager
 
 async def test_engines():
     await session_manager.startup()
     
-    url = "https://www.cnbc.com/2026/06/15/anthropic-mythos-trump-ai.html"
+    url = "https://finance.yahoo.com/news/why-nvidia-stock-dipped-today-153026859.html"
+    print(f"Testing url: {url}")
     
     engines = {
         "http": HttpEngine(),
         "playwright": PlaywrightEngine(),
-        "crawl4ai": Crawl4aiEngine(),
-        "auto": AutoEngine()
+        "crawl4ai": Crawl4aiEngine()
     }
     
     for name, engine in engines.items():
@@ -35,7 +38,7 @@ async def test_engines():
             else:
                 print("No content retrieved.")
         except Exception as e:
-            print(f"Engine {name} failed with exception: {e}")
+            print(f"Engine {name} failed with exception: {e}", exc_info=True)
             
     await session_manager.shutdown()
 

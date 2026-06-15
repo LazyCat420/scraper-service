@@ -13,6 +13,7 @@ from app.engines.http_engine import HttpEngine
 from app.engines.playwright_engine import PlaywrightEngine
 from app.engines.crawl4ai_engine import Crawl4aiEngine
 from app.engines.vision_engine import VisionEngine
+from app.engines.auto_engine import AutoEngine
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -23,6 +24,7 @@ ENGINES = {
     "playwright": PlaywrightEngine(),
     "crawl4ai": Crawl4aiEngine(),
     "vision": VisionEngine(),
+    "auto": AutoEngine(),
 }
 
 
