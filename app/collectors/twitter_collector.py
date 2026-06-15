@@ -68,7 +68,7 @@ class TwitterCollector:
             return self._api
 
         # Set DB path to a stable location
-        db_path = os.getenv("TWSCRAPE_DB", "/home/lazycat/.twscrape/accounts.db")
+        db_path = os.getenv("TWSCRAPE_DB", os.path.expanduser("~/.twscrape/accounts.db"))
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         
         # Initialize twscrape API
