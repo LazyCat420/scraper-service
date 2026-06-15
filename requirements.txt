@@ -16,6 +16,7 @@ beautifulsoup4==4.14.3
 lxml>=5.0.0
 trafilatura>=1.6.0
 feedparser==6.0.12
+fake-useragent==1.5.1
 
 # Cloudflare bypass
 cloudscraper>=1.2.71

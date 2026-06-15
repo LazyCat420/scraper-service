@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 import feedparser
 from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
 
 from app.core.rate_limiter import rate_limiter
 from app.core.session_manager import session_manager
@@ -198,6 +199,23 @@ def _parse_rss_entry(entry: dict, subreddit: str) -> dict:
     }
 
 
+def _get_reddit_headers() -> dict[str, str]:
+    """Generate headers with a random User-Agent to avoid blocking."""
+    try:
+        ua = UserAgent()
+        user_agent = ua.random
+    except Exception:
+        user_agent = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        )
+    return {
+        "User-Agent": user_agent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.5",
+    }
+
+
 class RedditCollector:
     """Collects Reddit posts from specified subreddits.
 
@@ -298,7 +316,9 @@ class RedditCollector:
                                 try:
                                     domain = "www.reddit.com"
                                     async with rate_limiter.acquire(domain):
-                                        r = await session_manager.client.get(json_url, timeout=15.0)
+                                        r = await session_manager.client.get(
+                                            json_url, headers=_get_reddit_headers(), timeout=15.0
+                                        )
                                     if r.status_code == 200:
                                         data = r.json()
                                         if isinstance(data, list) and len(data) > 0:
@@ -332,7 +352,9 @@ class RedditCollector:
                 }
 
                 async with rate_limiter.acquire(domain):
-                    r = await session_manager.client.get(url, params=params, timeout=30.0)
+                    r = await session_manager.client.get(
+                        url, params=params, headers=_get_reddit_headers(), timeout=30.0
+                    )
 
                 if r.status_code == 200:
                     data = r.json()
@@ -388,7 +410,9 @@ class RedditCollector:
         logger.info(f"[reddit] RSS search fetch: {url} with params {params}")
         try:
             async with rate_limiter.acquire(domain):
-                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                r = await session_manager.client.get(
+                    url, params=params, headers=_get_reddit_headers(), timeout=30.0
+                )
                 
             if r.status_code != 200:
                 logger.error(f"[reddit] RSS search HTTP error: {r.status_code}")
@@ -417,7 +441,9 @@ class RedditCollector:
 
         try:
             async with rate_limiter.acquire(domain):
-                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                r = await session_manager.client.get(
+                    url, params=params, headers=_get_reddit_headers(), timeout=30.0
+                )
 
             if r.status_code == 429:
                 logger.warning(f"[reddit] r/{subreddit} JSON rate limited. Trying RSS fallback...")
@@ -451,7 +477,9 @@ class RedditCollector:
         logger.info(f"[reddit] r/{subreddit} RSS fallback fetch: {url}")
         try:
             async with rate_limiter.acquire(domain):
-                r = await session_manager.client.get(url, params=params, timeout=30.0)
+                r = await session_manager.client.get(
+                    url, params=params, headers=_get_reddit_headers(), timeout=30.0
+                )
                 
             if r.status_code != 200:
                 logger.error(f"[reddit] r/{subreddit} RSS fallback HTTP error: {r.status_code}")
