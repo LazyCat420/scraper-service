@@ -37,7 +37,7 @@ class BatchRequest(BaseModel):
 # ── Collect Endpoints ──
 
 class CollectRequest(BaseModel):
-    source: Literal["reddit", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo"]
+    source: Literal["reddit", "reddit-purge", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo"]
     query: str | None = None
     subreddits: list[str] | None = None
     channels: list[str] | None = None
@@ -62,6 +62,10 @@ class CollectRequest(BaseModel):
     tag: str | None = None                  # Discourse tag filter
     period: str | None = None               # Discourse top period (daily/weekly/monthly)
     rsp_numbers: list[str] | None = None     # Kannapedia RSP numbers to scrape
+    # Reddit-purge specific fields
+    use_llm: bool = False
+    ollama_host: str | None = None
+    ollama_model: str | None = None
 
 
 class CollectResponse(BaseModel):

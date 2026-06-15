@@ -17,6 +17,7 @@ lxml>=5.0.0
 trafilatura>=1.6.0
 feedparser==6.0.12
 fake-useragent>=2.0.3
+yfinance==0.2.40
 
 # Cloudflare bypass
 cloudscraper>=1.2.71

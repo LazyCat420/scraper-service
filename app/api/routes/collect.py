@@ -37,6 +37,8 @@ async def collect(req: CollectRequest):
 
         if req.source == "reddit":
             return await _collect_reddit(req)
+        elif req.source == "reddit-purge":
+            return await _collect_reddit_purge(req)
         elif req.source == "youtube":
             return await _collect_youtube(req)
         elif req.source in ("news", "rss"):
@@ -62,6 +64,26 @@ async def collect(req: CollectRequest):
             source=req.source, count=0, items=[],
             error=str(e),
         )
+
+
+async def _collect_reddit_purge(req: CollectRequest) -> CollectResponse:
+    """Collect Reddit posts, extract and validate ticker symbols."""
+    import os
+    from app.collectors.reddit_purge_collector import RedditPurgeCollector
+
+    collector = RedditPurgeCollector()
+    ollama_host = req.ollama_host or os.getenv("OLLAMA_HOST", "http://10.0.0.29:11434")
+    ollama_model = req.ollama_model or os.getenv("OLLAMA_MODEL", "mistral")
+    
+    ticker_results = await collector.collect(
+        subreddits=req.subreddits,
+        use_llm=req.use_llm,
+        ollama_host=ollama_host,
+        ollama_model=ollama_model,
+        limit=req.limit or 10
+    )
+    
+    return CollectResponse(source="reddit-purge", count=len(ticker_results), items=ticker_results)
 
 
 async def _collect_reddit(req: CollectRequest) -> CollectResponse:
@@ -481,6 +503,8 @@ async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
         try:
             if req.source == "reddit":
                 res = await _collect_reddit(req)
+            elif req.source == "reddit-purge":
+                res = await _collect_reddit_purge(req)
             elif req.source in ("news", "rss"):
                 res = await _collect_news(req)
             elif req.source == "discourse":
