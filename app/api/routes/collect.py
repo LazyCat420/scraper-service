@@ -137,13 +137,13 @@ async def _collect_youtube(req: CollectRequest) -> CollectResponse:
             videos = await collector.collect_channel(
                 channel_handle=channel,
                 max_videos=min(req.limit, 10),
-                days_back=req.days_back if req.days_back is not None else 30,
+                days_back=req.days_back if req.days_back is not None else 0,
                 require_transcript=req.require_transcript,
             )
             all_videos.extend(videos)
     elif req.query:
         # Search mode
-        days_back = req.days_back if req.days_back is not None else 30
+        days_back = req.days_back if req.days_back is not None else 0
         all_videos = await collector.search(
             query=req.query,
             max_results=req.limit,
@@ -475,14 +475,14 @@ async def _collect_youtube_stream(req: CollectRequest) -> StreamingResponse:
                     async for video in collector.collect_channel_generator(
                         channel_handle=channel,
                         max_videos=min(req.limit, 10),
-                        days_back=req.days_back if req.days_back is not None else 30,
+                        days_back=req.days_back if req.days_back is not None else 0,
                         require_transcript=req.require_transcript,
                     ):
                         logger.info(f"[collect] Yielding video {video.video_id} for channel {channel}")
                         yield json.dumps(_serialize_video(video)) + "\n"
             elif req.query:
                 logger.info(f"[collect] YouTube stream started for search query: '{req.query}'")
-                days_back = req.days_back if req.days_back is not None else 30
+                days_back = req.days_back if req.days_back is not None else 0
                 async for video in collector.search_generator(
                     query=req.query,
                     max_results=req.limit,
