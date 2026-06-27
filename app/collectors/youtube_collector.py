@@ -70,7 +70,7 @@ class YouTubeCollector:
     ) -> list[YouTubeVideo]:
         """Get recent videos from a YouTube channel with transcripts."""
         videos_data = await asyncio.to_thread(
-            self._get_channel_videos, channel_handle, max_videos
+            self._get_channel_videos, channel_handle, max_videos, days_back
         )
 
         if not videos_data:
@@ -98,7 +98,7 @@ class YouTubeCollector:
     ):
         """Yield recent videos from a YouTube channel with transcripts."""
         videos_data = await asyncio.to_thread(
-            self._get_channel_videos, channel_handle, max_videos
+            self._get_channel_videos, channel_handle, max_videos, days_back
         )
 
         if not videos_data:
@@ -226,7 +226,7 @@ class YouTubeCollector:
             view_count=video.get("view_count", 0) or 0,
         )
 
-    def _get_channel_videos(self, channel: str, max_videos: int) -> list[dict]:
+    def _get_channel_videos(self, channel: str, max_videos: int, days_back: int = 0) -> list[dict]:
         """Use yt-dlp to get recent video metadata from a channel."""
         try:
             if channel.startswith("UC") and len(channel) == 24:
@@ -241,8 +241,10 @@ class YouTubeCollector:
                 "--flat-playlist", "--dump-json",
                 f"--playlist-end={max_videos}",
                 "--no-download", "--quiet",
-                "--extractor-args", "youtubetab:approximate_date",
             ]
+            
+            if days_back > 0:
+                cmd.extend(["--dateafter", f"now-{days_back}days"])
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             if result.returncode != 0:
@@ -263,7 +265,7 @@ class YouTubeCollector:
             logger.error(f"[youtube] yt-dlp error for {channel}: {e}")
             return []
 
-    def _search_youtube(self, query: str, max_results: int, sort: str | None = None) -> list[dict]:
+    def _search_youtube(self, query: str, max_results: int, sort: str | None = "date") -> list[dict]:
         """Use yt-dlp ytsearch to find videos matching a query with DuckDuckGo fallback."""
         videos = []
         search_prefix = "ytsearchdate" if sort == "date" else "ytsearch"
@@ -275,7 +277,6 @@ class YouTubeCollector:
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
                 "--socket-timeout", "15",
-                "--extractor-args", "youtubetab:approximate_date",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
