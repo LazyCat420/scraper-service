@@ -196,6 +196,17 @@ class YouTubeCollector:
         upload_date = video.get("upload_date", "")
         duration = video.get("duration", 0) or 0
 
+        # Fallback to fetching single-video metadata if upload_date is missing (e.g. from flat-playlist search results)
+        if not upload_date:
+            try:
+                video_info = await asyncio.to_thread(self._get_video_info_fallback, video_id)
+                if video_info:
+                    upload_date = video_info.get("upload_date", "")
+                    if not duration:
+                        duration = video_info.get("duration", 0) or 0
+            except Exception as e:
+                logger.warning(f"[youtube] Failed fetching fallback metadata for {video_id}: {e}")
+
         published_at = None
         if upload_date:
             try:
@@ -226,8 +237,103 @@ class YouTubeCollector:
             view_count=video.get("view_count", 0) or 0,
         )
 
+    def _get_video_info_fallback(self, video_id: str) -> dict | None:
+        """Fetch full metadata for a single video to resolve upload_date."""
+        try:
+            cmd = [
+                sys.executable, "-m", "yt_dlp",
+                f"https://www.youtube.com/watch?v={video_id}",
+                "--dump-json", "--no-download", "--quiet"
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout.strip())
+        except Exception:
+            pass
+        return None
+
     def _get_channel_videos(self, channel: str, max_videos: int, days_back: int = 0) -> list[dict]:
-        """Use yt-dlp to get recent video metadata from a channel."""
+        """Use YouTube RSS feed (fast, accurate date) first, fallback to yt-dlp."""
+        channel_id = None
+        if channel.startswith("UC") and len(channel) == 24:
+            channel_id = channel
+        else:
+            clean_channel = channel.lstrip("@")
+            # 1. Resolve handle to channel ID using HTML scrape
+            try:
+                import urllib.request
+                import re
+                url = f"https://www.youtube.com/@{clean_channel}"
+                req = urllib.request.Request(
+                    url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'}
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    html = response.read().decode('utf-8', errors='ignore')
+                    match = re.search(r'UC[a-zA-Z0-9_-]{22}', html)
+                    if match:
+                        channel_id = match.group(0)
+                        logger.info(f"[youtube] Resolved handle {channel} to channel ID {channel_id}")
+            except Exception as e:
+                logger.warning(f"[youtube] Failed resolving handle {channel} via HTML scrap: {e}")
+
+        # 2. Try XML RSS Feed
+        if channel_id:
+            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+            try:
+                import urllib.request
+                import xml.etree.ElementTree as ET
+                req = urllib.request.Request(
+                    rss_url,
+                    headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    xml_data = response.read()
+                    root = ET.fromstring(xml_data)
+                    ns = {
+                        'atom': 'http://www.w3.org/2005/Atom',
+                        'yt': 'http://www.youtube.com/xml/schemas/2015',
+                        'media': 'http://search.yahoo.com/mrss/'
+                    }
+                    videos = []
+                    entries = root.findall('atom:entry', ns)
+                    for entry in entries[:max_videos]:
+                        video_id_el = entry.find('yt:videoId', ns)
+                        title_el = entry.find('atom:title', ns)
+                        published_el = entry.find('atom:published', ns)
+                        author_el = entry.find('atom:author/atom:name', ns)
+                        
+                        media_group = entry.find('media:group', ns)
+                        thumbnail_url = ""
+                        if media_group is not None:
+                            thumb_el = media_group.find('media:thumbnail', ns)
+                            if thumb_el is not None:
+                                thumbnail_url = thumb_el.attrib.get('url', '')
+                        
+                        if video_id_el is not None and title_el is not None:
+                            video_id = video_id_el.text
+                            published_str = published_el.text if published_el is not None else ""
+                            upload_date = ""
+                            if published_str and len(published_str) >= 10:
+                                upload_date = published_str[:10].replace("-", "")
+                                
+                            videos.append({
+                                "id": video_id,
+                                "title": title_el.text,
+                                "channel": author_el.text if author_el is not None else channel,
+                                "upload_date": upload_date,
+                                "thumbnail": thumbnail_url,
+                                "duration": 0,
+                                "view_count": 0
+                            })
+                    if videos:
+                        logger.info(f"[youtube] Successfully fetched {len(videos)} videos via RSS for {channel}")
+                        return videos
+            except Exception as e:
+                logger.warning(f"[youtube] RSS fetch failed for {channel} (ID: {channel_id}): {e}")
+
+        # 3. Fallback to original yt-dlp approach
+        logger.info(f"[youtube] Falling back to yt-dlp channel videos query for {channel}")
         try:
             if channel.startswith("UC") and len(channel) == 24:
                 url = f"https://www.youtube.com/channel/{channel}/videos"
