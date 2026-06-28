@@ -265,10 +265,10 @@ class YouTubeCollector:
             logger.error(f"[youtube] yt-dlp error for {channel}: {e}")
             return []
 
-    def _search_youtube(self, query: str, max_results: int, sort: str | None = "date") -> list[dict]:
+    def _search_youtube(self, query: str, max_results: int, sort: str | None = None) -> list[dict]:
         """Use yt-dlp ytsearch to find videos matching a query with DuckDuckGo fallback."""
         videos = []
-        search_prefix = "ytsearchdate" if sort == "date" else "ytsearch"
+        search_prefix = "ytsearch" if sort == "relevance" else "ytsearchdate"
         try:
             cmd = [
                 sys.executable, "-m", "yt_dlp",
