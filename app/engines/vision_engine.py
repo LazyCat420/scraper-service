@@ -100,7 +100,7 @@ async def _ocr_with_openai(screenshots: list[bytes], prompt: str) -> str | None:
     """Send screenshots to Prism VLM for OCR."""
     import httpx
 
-    prism_url = os.getenv("PRISM_URL", "http://prism-service:7777/agent")
+    prism_url = os.getenv("PRISM_URL", "http://lazy-agent-service:7778/agent")
     base_url = prism_url
     if base_url.endswith("/agent"):
         base_url = base_url[:-6] + "/chat"
