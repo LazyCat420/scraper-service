@@ -266,18 +266,30 @@ class YouTubeCollector:
             return []
 
     def _search_youtube(self, query: str, max_results: int, sort: str | None = None) -> list[dict]:
-        """Use yt-dlp ytsearch to find videos matching a query with DuckDuckGo fallback."""
+        """Use yt-dlp to find videos matching a query with DuckDuckGo fallback."""
         videos = []
-        search_prefix = "ytsearch" if sort == "relevance" else "ytsearchdate"
+        import urllib.parse
+        
+        if sort == "relevance":
+            target = f"ytsearch{max_results}:{query}"
+            playlist_end_arg = None
+        else:
+            # Default to date sorting (upload date) using YouTube results filter parameter sp=CAI%3D
+            encoded_query = urllib.parse.quote(query)
+            target = f"https://www.youtube.com/results?search_query={encoded_query}&sp=CAI%3D"
+            playlist_end_arg = f"--playlist-end={max_results}"
+
         try:
             cmd = [
                 sys.executable, "-m", "yt_dlp",
-                f"{search_prefix}{max_results}:{query}",
+                target,
                 "--flat-playlist",
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
                 "--socket-timeout", "15",
             ]
+            if playlist_end_arg:
+                cmd.append(playlist_end_arg)
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             if result.returncode == 0 and result.stdout.strip():
