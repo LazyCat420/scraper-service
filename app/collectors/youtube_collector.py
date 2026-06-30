@@ -123,7 +123,7 @@ class YouTubeCollector:
     ) -> list[YouTubeVideo]:
         """Search YouTube for videos matching a query and extract transcripts."""
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results, sort
+            self._search_youtube, query, max_results, sort, not require_transcript
         )
 
         if not videos_data:
@@ -154,7 +154,7 @@ class YouTubeCollector:
     ):
         """Yield YouTube videos matching a query in real-time."""
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results, sort
+            self._search_youtube, query, max_results, sort, not require_transcript
         )
 
         if not videos_data:
@@ -197,7 +197,7 @@ class YouTubeCollector:
         duration = video.get("duration", 0) or 0
 
         # Fallback to fetching single-video metadata if upload_date is missing (e.g. from flat-playlist search results)
-        if not upload_date:
+        if not upload_date and require_transcript:
             try:
                 video_info = await asyncio.to_thread(self._get_video_info_fallback, video_id)
                 if video_info:
@@ -371,8 +371,13 @@ class YouTubeCollector:
             logger.error(f"[youtube] yt-dlp error for {channel}: {e}")
             return []
 
-    def _search_youtube(self, query: str, max_results: int, sort: str | None = None) -> list[dict]:
+    def _search_youtube(self, query: str, max_results: int, sort: str | None = None, use_ddg_first: bool = False) -> list[dict]:
         """Use yt-dlp to find videos matching a query with DuckDuckGo fallback."""
+        if use_ddg_first:
+            videos = self._search_duckduckgo(query, max_results)
+            if videos:
+                return videos
+        
         videos = []
         import urllib.parse
         
