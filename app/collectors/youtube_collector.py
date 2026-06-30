@@ -392,11 +392,11 @@ class YouTubeCollector:
                 "--flat-playlist",
                 "--dump-json", "--no-download", "--no-playlist",
                 "--quiet", "--no-warnings",
-                "--socket-timeout", "15",
+                "--socket-timeout", "5",
             ]
             if playlist_end_arg:
                 cmd.append(playlist_end_arg)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
 
             if result.returncode == 0 and result.stdout.strip():
                 for line in result.stdout.strip().split("\n"):
