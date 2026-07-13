@@ -127,7 +127,7 @@ class RedditPurgeCollector:
         selected = []
         batch_size = 20
         
-        prism_url = os.getenv("PRISM_URL", "http://lazy-agent-service:7778/agent")
+        prism_url = os.getenv("PRISM_URL", "http://lazy-tool-service:7778/agent")
         base_url = prism_url
         if base_url.endswith("/agent"):
             base_url = base_url[:-6] + "/chat"
