@@ -48,6 +48,7 @@ class CollectRequest(BaseModel):
     cashtags: list[str] | None = None      # Twitter $AAPL-style cashtags
     symbol: str | None = None              # StockTwits symbol
     limit: int = Field(default=50, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)  # skip first N results (youtube search paging)
     from_date: str | None = None
     sort: str | None = None
     time_filter: str | None = None

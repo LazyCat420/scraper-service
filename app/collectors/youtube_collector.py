@@ -120,11 +120,19 @@ class YouTubeCollector:
         days_back: int = 30,
         require_transcript: bool = True,
         sort: str | None = None,
+        offset: int = 0,
     ) -> list[YouTubeVideo]:
-        """Search YouTube for videos matching a query and extract transcripts."""
+        """Search YouTube for videos matching a query and extract transcripts.
+
+        offset skips the first N search results so pagination doesn't re-process
+        and re-send videos the caller already has (yt-dlp search has no cursor,
+        so the flat search still enumerates offset+max_results entries).
+        """
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results, sort, not require_transcript
+            self._search_youtube, query, offset + max_results, sort, not require_transcript
         )
+        if offset:
+            videos_data = videos_data[offset:]
 
         if not videos_data:
             return []
@@ -151,11 +159,14 @@ class YouTubeCollector:
         days_back: int = 30,
         require_transcript: bool = True,
         sort: str | None = None,
+        offset: int = 0,
     ):
-        """Yield YouTube videos matching a query in real-time."""
+        """Yield YouTube videos matching a query in real-time (offset: see search())."""
         videos_data = await asyncio.to_thread(
-            self._search_youtube, query, max_results, sort, not require_transcript
+            self._search_youtube, query, offset + max_results, sort, not require_transcript
         )
+        if offset:
+            videos_data = videos_data[offset:]
 
         if not videos_data:
             return
