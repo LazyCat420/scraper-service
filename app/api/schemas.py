@@ -37,7 +37,7 @@ class BatchRequest(BaseModel):
 # ── Collect Endpoints ──
 
 class CollectRequest(BaseModel):
-    source: Literal["reddit", "reddit-purge", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo", "twitter", "stocktwits"]
+    source: Literal["reddit", "reddit-purge", "youtube", "news", "rss", "discourse", "xenforo", "kannapedia", "leafly", "duckduckgo", "twitter", "stocktwits", "finnews"]
     query: str | None = None
     subreddits: list[str] | None = None
     channels: list[str] | None = None
@@ -47,6 +47,9 @@ class CollectRequest(BaseModel):
     usernames: list[str] | None = None     # Twitter users to scrape
     cashtags: list[str] | None = None      # Twitter $AAPL-style cashtags
     symbol: str | None = None              # StockTwits symbol
+    # Financial news API fields
+    tickers: list[str] | None = None        # Ticker symbols for API queries
+    provider: str | None = None             # Specific provider (e.g. 'marketaux'), or None for all
     limit: int = Field(default=50, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)  # skip first N results (youtube search paging)
     from_date: str | None = None

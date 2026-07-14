@@ -57,6 +57,8 @@ async def collect(req: CollectRequest):
             return await _collect_twitter(req)
         elif req.source == "stocktwits":
             return await _collect_stocktwits(req)
+        elif req.source == "finnews":
+            return await _collect_finnews(req)
         else:
             return CollectResponse(
                 source=req.source, count=0, items=[],
@@ -527,6 +529,8 @@ async def _collect_fallback_stream(req: CollectRequest) -> StreamingResponse:
                 res = await _collect_twitter(req)
             elif req.source == "stocktwits":
                 res = await _collect_stocktwits(req)
+            elif req.source == "finnews":
+                res = await _collect_finnews(req)
             else:
                 yield json.dumps({"error": f"Unknown source: {req.source}"}) + "\n"
                 return
@@ -578,5 +582,29 @@ async def _collect_stocktwits(req: CollectRequest) -> CollectResponse:
     items = [_serialize_message(m) for m in messages]
     return CollectResponse(source="stocktwits", count=len(items), items=items)
 
+async def _collect_finnews(req: CollectRequest) -> CollectResponse:
+    """Collect financial news from API providers (Marketaux, Finnhub, AlphaVantage, etc.)."""
+    from app.collectors.finnews_collector import FinNewsCollector, _serialize_article
 
+    collector = FinNewsCollector()
 
+    if req.provider:
+        # Single provider mode
+        articles = await collector.fetch(
+            provider=req.provider,
+            tickers=req.tickers,
+            query=req.query,
+            limit=req.limit,
+            days_back=req.days_back or 7,
+        )
+    else:
+        # All available providers
+        articles = await collector.fetch_all(
+            tickers=req.tickers,
+            query=req.query,
+            limit=req.limit,
+            days_back=req.days_back or 7,
+        )
+
+    items = [_serialize_article(a) for a in articles]
+    return CollectResponse(source="finnews", count=len(items), items=items)

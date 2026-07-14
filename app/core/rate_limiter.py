@@ -21,6 +21,17 @@ DOMAIN_LIMITS: dict[str, float] = {
     "api.stlouisfed.org": 0.5,
     "api.worldbank.org": 1.0,
     "openinsider.com": 0.3,
+    # Financial News APIs
+    "finnhub.io": 1.0,                  # 60 calls/min free tier
+    "api.marketaux.com": 0.5,
+    "newsapi.org": 0.5,
+    "www.alphavantage.co": 0.2,         # Very low free-tier limit
+    "api.polygon.io": 0.08,             # 5 req/min free tier
+    "gnews.io": 0.5,
+    "api.currentsapi.services": 1.0,
+    "api.thenewsapi.com": 0.5,
+    "api.worldnewsapi.com": 0.5,
+    "api.stockdata.org": 0.5,
 }
 DEFAULT_RATE = 1.0  # 1 req/s for unknown domains
 
