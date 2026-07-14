@@ -1,6 +1,10 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
+
 @pytest.mark.asyncio
 @patch("httpx.AsyncClient.get")
 async def test_stocktwits_collect_success(mock_get):

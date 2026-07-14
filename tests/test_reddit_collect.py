@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 import os
 import sys
 from fastapi.testclient import TestClient
@@ -9,6 +10,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from app.collectors.reddit_collector import RedditCollector
 from app.core.session_manager import session_manager
 from app.main import app
+
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
 
 async def test_reddit_collector():
     print("Testing RedditCollector...")

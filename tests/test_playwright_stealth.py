@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 import os
 import sys
 
@@ -6,6 +7,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
+
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
 
 async def test_stealth():
     url = "https://www.marketwatch.com/story/20-growth-stocks-priced-as-value-stocks-c0f72ad4"

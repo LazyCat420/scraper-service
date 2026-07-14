@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 import os
 import sys
 
@@ -9,6 +10,10 @@ from app.engines.playwright_engine import PlaywrightEngine
 from app.engines.crawl4ai_engine import Crawl4aiEngine
 from app.engines.auto_engine import AutoEngine
 from app.core.session_manager import session_manager
+
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
 
 async def test_engines():
     await session_manager.startup()

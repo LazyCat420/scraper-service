@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 import os
 import sys
 
@@ -7,6 +8,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.collectors.news_collector import NewsCollector
 from app.core.session_manager import session_manager
+
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
 
 async def test_rss_collection():
     print("Testing RSS Feed collection...")

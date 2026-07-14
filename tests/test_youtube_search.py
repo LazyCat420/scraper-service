@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 import json
 import os
 import sys
@@ -9,6 +10,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from app.collectors.youtube_collector import YouTubeCollector
 from app.main import app
+
+
+# All tests in this module hit live external sites
+pytestmark = pytest.mark.live
 
 async def test_youtube_collector_search():
     print("Testing YouTubeCollector.search()...")
