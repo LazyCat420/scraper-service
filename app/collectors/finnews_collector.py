@@ -59,13 +59,21 @@ def _article_id(title: str, provider: str, url: str) -> str:
 
 
 def _parse_iso(s: str | None) -> datetime:
-    """Best-effort ISO 8601 parse, falls back to now(UTC)."""
+    """Best-effort ISO 8601 parse, ALWAYS tz-aware (UTC).
+
+    An ISO string without an offset ("2026-07-15T12:28:00") parses to a
+    tz-NAIVE datetime; mixing those with the tz-aware ones from other providers
+    made fetch_all's `all_articles.sort(key=published_at)` raise "can't compare
+    offset-naive and offset-aware datetimes" and zeroed out the combined result.
+    Normalise here so every article carries a comparable, tz-aware timestamp.
+    """
     if not s:
         return datetime.now(UTC)
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         return datetime.now(UTC)
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
 def _serialize_article(article: FinNewsArticle) -> dict:
