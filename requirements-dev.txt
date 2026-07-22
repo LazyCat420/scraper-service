@@ -1,3 +1,0 @@
-# Test dependencies
-pytest
-pytest-asyncio

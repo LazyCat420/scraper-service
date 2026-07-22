@@ -15,6 +15,32 @@ PRE_BUILD() {
     set -a; source "$CENTRAL_ENV"; set +a
     info "Loaded deploy-kit/.env.deploy"
   fi
+
+  # ── Stage scraper source from trading-service (single source of truth) ──
+  # The scraper logic lives in trading-service/app/scraper; we copy ONLY that
+  # subtree (plus the one broader-app helper it uses — app.utils.text_utils —
+  # and the lazycat SDK). The trading engine is deliberately NOT shipped, so
+  # this image stays a lean, domain-agnostic scraper. app/ and lazycat/ are
+  # gitignored and regenerated on every build.
+  local TS="${SCRIPT_DIR}/../trading-service"
+  local SDK="${SCRIPT_DIR}/../lazycat-sdk"
+  [ -d "${TS}/app/scraper" ] || fail "trading-service/app/scraper not found at ${TS} — clone repos as siblings"
+  [ -d "${SDK}/lazycat" ]    || fail "lazycat-sdk/lazycat not found at ${SDK} — clone repos as siblings"
+
+  step "Staging scraper source from trading-service/app/scraper"
+  rm -rf "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat"
+  mkdir -p "${SCRIPT_DIR}/app/scraper" "${SCRIPT_DIR}/app/utils"
+  : > "${SCRIPT_DIR}/app/__init__.py"
+  cp -r "${TS}/app/scraper/." "${SCRIPT_DIR}/app/scraper/"
+  # app.utils.text_utils is the only broader-app module the collectors import.
+  cp "${TS}/app/utils/text_utils.py" "${SCRIPT_DIR}/app/utils/text_utils.py"
+  : > "${SCRIPT_DIR}/app/utils/__init__.py"
+  # lazycat SDK: text_utils imports lazycat.llm_json; engines import lazycat.ratelimit
+  cp -r "${SDK}/lazycat" "${SCRIPT_DIR}/lazycat"
+  # Drop compiled caches so they can't shadow fresh source in the image
+  find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '*.pyc' -delete 2>/dev/null || true
+  ok "scraper source staged (app/scraper + app/utils/text_utils + lazycat)"
 }
 
 EXTRA_SSH_SYNC() {
