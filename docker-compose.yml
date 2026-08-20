@@ -7,6 +7,18 @@ services:
     env_file: .env
     environment:
       - TZ=America/Los_Angeles
+    # ── Why this container needs an init and a PID cap (2026-08-20) ──────
+    # Playwright orphans a Chromium whenever a scrape fails. Without an
+    # init, uvicorn IS pid 1 here and never reap()s, so every orphan became
+    # a permanent zombie. 20,179 of them exhausted the HOST's pid space
+    # (kernel.pid_max = 32768): fork() started returning EAGAIN box-wide,
+    # which killed the Docker daemon, wedged systemd's D-Bus name, and took
+    # the whole NAS down — twice. `init: true` runs tini as pid 1, which
+    # reaps orphans; pids_limit means a future leak kills this container
+    # instead of the machine. 1024 leaves room for real work: the pids
+    # cgroup counts THREADS, and one headless Chromium is ~100 tasks.
+    init: true
+    pids_limit: 1024
     volumes:
       - ./cookies.txt:/app/cookies.txt:ro
     restart: unless-stopped
