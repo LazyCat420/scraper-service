@@ -21,6 +21,17 @@ services:
     pids_limit: 1024
     volumes:
       - ./cookies.txt:/app/cookies.txt:ro
+      # ── Why the failure cache needs a volume (2026-09-03) ──────────────
+      # /app/logs holds failure_cache.db: the per-DOMAIN article-quality
+      # record (thin_streak, good_count, last_thin_at) plus dead_urls. It is
+      # what stops the collector re-fetching a domain that only ever returns
+      # a title. Measured 2026-09-03: 254 domains learned, 7 of them earning
+      # a skip (investors.com at a 19-thin streak, then zacks, biztoc,
+      # youtube, ft, marketwatch, x.com). Inside the container that record
+      # died with every rebuild and had to be re-learned one wasted fetch per
+      # URL at a time. A named volume rather than a bind mount: SQLite in WAL
+      # mode wants a real filesystem, not a Synology bind path.
+      - scraper-logs:/app/logs
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8001/health"]
@@ -38,3 +49,6 @@ services:
         limits:
           # Chromium is hungry; 2 uvicorn workers each boot their own browser.
           memory: 4G
+
+volumes:
+  scraper-logs:
