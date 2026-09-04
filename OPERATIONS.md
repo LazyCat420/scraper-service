@@ -74,6 +74,82 @@ lost its bus name it does not get it back (`kill -USR1 1` and `kill -TERM 1`
 were both tried and failed). **A reboot is still required** — clearing the
 pids first is what makes it a clean one.
 
+## What the container learns, and where it keeps it (2026-09-03)
+
+`/app/logs/failure_cache.db` is not a log. It is the record of what this
+service has **learned about the web**, and the engine reads it before it makes
+any network request at all — `auto_engine` calls `failure_cache.check(url)` and
+`should_skip_domain(domain)` in phases 0 and 0b, ahead of the fetch.
+
+Two tables:
+
+| table | holds |
+|---|---|
+| `domain_quality` | `domain, thin_streak, good_count, last_thin_at` |
+| `dead_urls` | `url, reason, expires_at` — permanent 404/410s |
+
+A domain is skipped only when it has **zero** good responses, a `thin_streak`
+of 5 or more, and its last thin response was within 24h. One good response
+zeroes the streak permanently. That three-part rule is deliberate, and
+`seekingalpha.com` is why: measured at `thin_streak` 10 with `good_count` 10, it
+is genuinely bimodal, and a plain blocklist would have dropped it.
+
+**Until 2026-09-03 this record lived inside the container, on no volume, and
+every rebuild erased it.** The service then re-learned each domain one wasted
+fetch per URL at a time, silently — nothing logs "I have forgotten everything".
+
+What was in it when it was measured on the live container that day:
+
+| | |
+|---|---|
+| domains learned | 254 |
+| dead URLs | 8 |
+| domains earning a skip | 7 |
+
+The seven: `www.investors.com` at a 19-thin streak, then `www.zacks.com`,
+`biztoc.com`, `www.youtube.com`, `www.ft.com`, `www.marketwatch.com`, `x.com`.
+
+`docker-compose.yml` now mounts a **named volume** at `/app/logs`. Named rather
+than a bind mount because SQLite in WAL mode wants a real filesystem, not a
+Synology bind path. The image ships `/app/logs` empty, so the mount hides
+nothing, and Docker seeds a new named volume from the image directory — which
+is what gives it the right `appusr` (uid 1001) ownership.
+
+**Deploying this change is not enough on its own.** A fresh volume starts empty,
+so the 254 rows have to be carried across or the cache silently restarts the
+learning — the exact failure the volume exists to prevent. What was done:
+
+```bash
+# BEFORE replacing the container: back the live DB up through SQLite, not cp
+sudo docker exec scraper-service python -c "
+import sqlite3
+s=sqlite3.connect('/app/logs/failure_cache.db'); d=sqlite3.connect('/tmp/fc.db')
+s.backup(d)"                       # cp of a WAL database can copy a torn file
+sudo docker cp scraper-service:/tmp/fc.db /volume1/docker/scraper-service/seed.db
+# ...deploy... then, into the new volume:
+sudo docker cp /volume1/docker/scraper-service/seed.db scraper-service:/tmp/seed.db
+sudo docker exec scraper-service python -c "
+import sqlite3
+live=sqlite3.connect('/app/logs/failure_cache.db'); seed=sqlite3.connect('/tmp/seed.db')
+live.executemany('insert or replace into domain_quality values (?,?,?,?)',
+                 seed.execute('select domain,thin_streak,good_count,last_thin_at from domain_quality'))
+live.executemany('insert or replace into dead_urls values (?,?,?)',
+                 seed.execute('select url,reason,expires_at from dead_urls'))
+live.commit()"
+```
+
+Verified after the deploy: 254 / 8 restored, all seven skips intact.
+
+To read the current state at any time:
+
+```bash
+sudo docker exec scraper-service python -c "
+import sqlite3; c=sqlite3.connect('/app/logs/failure_cache.db')
+print(c.execute('select count(*) from domain_quality').fetchone())
+print(list(c.execute('select domain,thin_streak,good_count from domain_quality'
+                     ' where good_count=0 and thin_streak>=5 order by thin_streak desc')))"
+```
+
 ## Open items
 
 - [ ] Not yet deployed as of 2026-08-20 — the running image still leaks.
@@ -82,3 +158,14 @@ pids first is what makes it a clean one.
       the zombie count rather than assuming.
 - [ ] No alert exists on host pid pressure. Both outages were first reported
       by a human noticing a dead website.
+- [ ] `domain_quality` is per-DOMAIN, but the news collector iterates 27 RSS
+      **feeds**. A feed whose articles all live on skipped domains is still
+      fetched and parsed every cycle before anything is skipped.
+- [ ] There is no "last full-text success" TIMESTAMP — only `good_count`, a
+      counter, and `last_thin_at`. "When did this domain last give us a real
+      article?" is unanswerable from this table.
+- [ ] trading-service imports the same `app/scraper` module tree but has no
+      `/app/logs`, so its copy degrades to memory-only with one warning. The
+      cache is only real inside THIS container.
+- [ ] Nothing prunes the volume. `/app/logs` now persists across rebuilds,
+      which is the point, but it also means nothing ages out.
