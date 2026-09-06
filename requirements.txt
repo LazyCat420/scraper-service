@@ -23,11 +23,15 @@ feedparser==6.0.12
 fake-useragent>=2.0.3
 yfinance==0.2.40
 
-# Cloudflare bypass
-cloudscraper>=1.2.71
-
 # YouTube
-yt-dlp==2026.3.17
+# yt-dlp is the most time-sensitive dependency here by a wide margin — YouTube
+# breaks extractors constantly and the fix always ships in a new release. The
+# pin sat at 2026.3.17 for ~6 months while five releases went by; commit
+# 7b77f4fe had already had to work around a 403 by forcing
+# player_client=android. Verified working before this bump (live /stream probe
+# returned a real googlevideo URL), so this is pre-emptive, not a repair —
+# re-probe /stream after deploying.
+yt-dlp==2026.8.19
 youtube-transcript-api==1.2.4
 
 # Browser automation — Playwright (chromium installed separately in Dockerfile)
@@ -44,8 +48,21 @@ tenacity>=8.5.0
 structlog>=24.4.0
 
 # HTTP compat
-urllib3==1.26.18
+# urllib3 is NOT imported by app/scraper — it arrives transitively through
+# requests. The old `urllib3==1.26.18` pin was therefore holding the whole image
+# on a 1.x line that nothing here asked for: requests accepts <3,>=1.26 and
+# yt-dlp's default extra wants >=2.0.2, so the pin was actively in tension with
+# the dependency it was presumably added for. 1.26.18 also predates the fix for
+# CVE-2025-66418 (unbounded decompression chain — a malicious server can force
+# arbitrary CPU and memory), which is a real exposure for a service whose entire
+# job is fetching untrusted pages. Left unpinned for pip to resolve.
+urllib3>=2.0.2
 chardet==5.2.0
+
+# Used lazily by app/scraper/collectors/youtube_collector.py. It was reaching
+# the image only as a transitive dependency, which means a resolver change could
+# have removed it and the failure would have been a per-request ImportError.
+requests>=2.32.0
 
 # DDG Search
 ddgs==9.11.4

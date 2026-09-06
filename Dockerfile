@@ -47,6 +47,15 @@ ENV PYTHONPATH="/app"
 ENV HOST="0.0.0.0"
 ENV PORT="8001"
 
+# Build provenance, surfaced on /health. Without this there is no way to ask a
+# running container which commit it was built from: app/ is a gitignored build
+# artifact, so `git diff` in this repo is trivially clean no matter what the
+# image contains, and "is the deployed scraper current?" was unanswerable.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV BUILD_SHA=$GIT_SHA
+ENV BUILD_TIME=$BUILD_TIME
+
 USER appusr
 
 # Pre-bake Chromium into appusr's cache (~/.cache/ms-playwright)

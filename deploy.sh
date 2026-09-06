@@ -32,7 +32,13 @@ PRE_BUILD() {
   mkdir -p "${SCRIPT_DIR}/app/scraper" "${SCRIPT_DIR}/app/utils"
   : > "${SCRIPT_DIR}/app/__init__.py"
   cp -r "${TS}/app/scraper/." "${SCRIPT_DIR}/app/scraper/"
-  # app.utils.text_utils is the only broader-app module the collectors import.
+  # app.utils.text_utils is the ONLY module outside app/scraper that the subtree
+  # may import. That is not an observation, it is an invariant, enforced by
+  # trading-service's tests/unit/test_scraper_subtree_import_closure.py — an
+  # allowlist keyed on exactly the copies below. This comment used to assert the
+  # same thing as a fact and was false for 27 days: two collectors imported
+  # app.utils.async_utils, which ImportErrors in THIS image only. If you add a
+  # cp line here, add the module to STAGED_MODULES in that test.
   cp "${TS}/app/utils/text_utils.py" "${SCRIPT_DIR}/app/utils/text_utils.py"
   : > "${SCRIPT_DIR}/app/utils/__init__.py"
   # lazycat SDK: text_utils imports lazycat.llm_json; engines import lazycat.ratelimit
@@ -41,6 +47,22 @@ PRE_BUILD() {
   find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
   find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '*.pyc' -delete 2>/dev/null || true
   ok "scraper source staged (app/scraper + app/utils/text_utils + lazycat)"
+
+  # ── Drift: say which commit is being shipped, and prove the source is clean ──
+  # The staged tree is gitignored, so nothing here would otherwise notice that
+  # the image is behind trading-service. Measured 2026-09-06: app/scraper matched
+  # the last build byte-for-byte while text_utils.py was 66 lines behind, and no
+  # signal existed anywhere. Stamp the SOURCE repo's sha, not this repo's — the
+  # code being shipped is trading-service's.
+  local TS_SHA TS_DIRTY
+  TS_SHA=$(git -C "$TS" rev-parse --short HEAD 2>/dev/null || echo unknown)
+  TS_DIRTY=$(git -C "$TS" status --porcelain -- app/scraper app/utils/text_utils.py 2>/dev/null)
+  if [ -n "$TS_DIRTY" ]; then
+    warn "trading-service has UNCOMMITTED scraper changes — this image will contain code that is in no commit:"
+    echo "$TS_DIRTY" | sed 's/^/    /'
+  fi
+  BUILD_ARGS="${BUILD_ARGS} --build-arg GIT_SHA=${TS_SHA} --build-arg BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  info "Shipping trading-service@${TS_SHA} (verify with: curl -s http://10.0.0.16:8001/health | jq .build)"
 }
 
 EXTRA_SSH_SYNC() {

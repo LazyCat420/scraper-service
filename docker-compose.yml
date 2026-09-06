@@ -34,6 +34,9 @@ services:
       - scraper-logs:/app/logs
     restart: unless-stopped
     healthcheck:
+      # wget exits non-zero on a 503, which is what makes /health's new
+      # dependency checks able to mark this container unhealthy at all. While
+      # /health was a hardcoded literal, this line could only ever pass.
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "-O", "/dev/null", "http://localhost:8001/health"]
       interval: 30s
       timeout: 5s

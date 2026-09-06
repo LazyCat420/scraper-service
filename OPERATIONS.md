@@ -150,22 +150,94 @@ print(list(c.execute('select domain,thin_streak,good_count from domain_quality'
                      ' where good_count=0 and thin_streak>=5 order by thin_streak desc')))"
 ```
 
+## Authentication (2026-09-06)
+
+`/scrape`, `/collect` and `/stream` require the `X-Scraper-Key` header. It is
+enforced only when `SCRAPER_API_KEY` is set — **an unset key means no auth at
+all**, which is how this service ran until 2026-09-06.
+
+That shape is deliberate: it makes the rollout safe in this order, with no
+window where a live cycle eats a 401.
+
+```
+1. deploy scraper-service   # key unset everywhere -> open, exactly as before
+2. set SCRAPER_API_KEY in trading-service's .env, redeploy it
+3. set SCRAPER_API_KEY in scraper-service's .env, restart
+```
+
+`/health` is never gated — the container healthcheck is a plain `wget` with no
+headers, so gating it would restart-loop the container.
+
+Check which mode a running container is in — it says so at boot:
+
+```sh
+sudo docker logs scraper-service 2>&1 | grep "API key auth"
+```
+
+## Which commit is running? (2026-09-06)
+
+`/health` now answers this. It could not before: `app/` is a gitignored build
+artifact, so `git diff` in this repo is trivially clean whatever the image
+holds, and the staged copy silently drifted (measured 2026-09-06: `app/scraper`
+matched the build byte-for-byte while `text_utils.py` was 66 lines behind).
+
+```sh
+curl -s http://10.0.0.16:8001/health | jq '{build, checks, status}'
+```
+
+`build.sha` is **trading-service's** commit, not this repo's — the scraper code
+being shipped is trading-service's. The deploy also warns if that tree has
+uncommitted scraper changes, which would put code in the image that exists in
+no commit.
+
+⚠ `/health` can now return **503**, which it never could before (it returned a
+hardcoded literal, so the health gate only ever tested "uvicorn is accepting
+sockets"). A 503 means the shared httpx client is gone. A degraded failure cache
+is reported in `checks` but deliberately does NOT flip the status — memory-only
+costs one wasted fetch per URL, it does not fail a scrape.
+
 ## Open items
 
-- [ ] Not yet deployed as of 2026-08-20 — the running image still leaks.
-- [ ] The `finally` fix is pinned by no test. After deploy, tini will reap
-      regardless, which can mask a `close()` that is still leaking; watch
-      the zombie count rather than assuming.
+- [x] ~~Not yet deployed as of 2026-08-20 — the running image still leaks.~~
+      Shipped; the 2026-09-03 rebuild carries `b75c0e50`.
+- [x] ~~The `finally` fix is pinned by no test.~~ Now pinned in
+      `trading-service/tests/unit/test_playwright_engine_closes_browser.py`,
+      parametrised over goto / new_context / new_page / evaluate / screenshot
+      failures plus cancellation. The previous test lived in this repo's
+      `tests/`, which has no pytest config and is outside trading-service's
+      `testpaths` — so nothing ran it.
+- [x] ~~Nothing prunes the volume.~~ `prune()` now ages out `domain_quality`
+      (`SCRAPER_DOMAIN_MAX_AGE_S`, default 90d) as well as `dead_urls`, and is
+      reachable from the read path — it previously ran only from `record()`,
+      which fires on a 404/410, measured at 8 rows in 14 days.
 - [ ] No alert exists on host pid pressure. Both outages were first reported
-      by a human noticing a dead website.
+      by a human noticing a dead website. Concurrent browsers are now capped at
+      4 per process (`SCRAPER_MAX_BROWSERS`), which bounds the leak rate but
+      does not alert on it.
 - [ ] `domain_quality` is per-DOMAIN, but the news collector iterates 27 RSS
       **feeds**. A feed whose articles all live on skipped domains is still
       fetched and parsed every cycle before anything is skipped.
-- [ ] There is no "last full-text success" TIMESTAMP — only `good_count`, a
-      counter, and `last_thin_at`. "When did this domain last give us a real
-      article?" is unanswerable from this table.
+- [ ] There is no "last full-text success" TIMESTAMP. `last_seen` (added with
+      the v1 schema migration) records when a domain was last *seen*, not when
+      it last gave us a real article, so "when did this domain last work?" is
+      still unanswerable from this table.
 - [ ] trading-service imports the same `app/scraper` module tree but has no
       `/app/logs`, so its copy degrades to memory-only with one warning. The
       cache is only real inside THIS container.
-- [ ] Nothing prunes the volume. `/app/logs` now persists across rebuilds,
-      which is the point, but it also means nothing ages out.
+- [ ] The scraper subtree has no metrics at all — every observable is a log
+      line. There is no success rate by engine or domain, no skip counter, and
+      no browser/pid gauge, so the questions this document tells you to ask
+      during an incident can only be answered by reading logs.
+
+## Schema migrations (2026-09-06)
+
+`failure_cache.db` now carries `PRAGMA user_version` and a migration ladder.
+This matters because the database **outlives the deploy** since `3e5651c`: an
+old file meets new code every time. Before the ladder, the first added column
+would have raised `no such column`, been classified as a permanent fault, and
+silently disabled the shared store on every worker behind a single warning.
+
+Adding a column: bump `_SCHEMA_VERSION` in
+`trading-service/app/scraper/core/failure_cache.py` and add the `ALTER` to
+`_migrate`. A database written by a NEWER build is detected and left alone
+rather than downgraded.
