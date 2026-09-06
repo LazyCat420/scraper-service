@@ -26,17 +26,60 @@ Full post-mortem, including the diagnosis path and the recovery that freed
 
 ## What now protects the host
 
-`docker-compose.yml` carries two lines that must not be removed:
+### ⚠ `pids_limit` DOES NOT WORK ON THIS BOX, and never has (measured 2026-09-06)
 
-```yaml
-init: true        # tini as pid 1 — reaps orphans. uvicorn cannot.
-pids_limit: 1024  # a leak costs THIS CONTAINER, not the machine
+`docker-compose.yml` carries `pids_limit: 1024`, and this document used to
+present it as one of "two lines that must not be removed" — the one that makes
+"a leak cost THIS CONTAINER, not the machine". **That is false here.** Every
+deploy prints, and everyone has been scrolling past:
+
+```
+scraper-service Your kernel does not support PIDs limit capabilities
+                or the cgroup is not mounted. PIDs limit discarded.
 ```
 
-`pids_limit` is sized for real work, not tightly: **the pids cgroup counts
-threads**, and a single headless Chromium is roughly 100 tasks. Two uvicorn
-workers each booting a browser sit comfortably under 1024; the 20k runaway
-does not.
+Measured on the live NAS after the 2026-09-06 deploy:
+
+```sh
+$ sudo docker inspect scraper-service --format '{{.HostConfig.PidsLimit}}'
+<nil>                       # not 1024 — no limit is applied at all
+
+$ grep -w pids /proc/cgroups
+                            # no output: there is no pids controller
+
+$ uname -r
+4.4.302+                    # DSM's kernel; enabled controllers are
+                            # cpuset cpu cpuacct blkio memory devices freezer
+```
+
+So the containment half of the mitigation is **not in effect**, and was not in
+effect during either outage or at any point since. A Chromium leak here can
+still reach the host's pid space and take the machine down exactly as it did
+twice on 2026-08-20. Leave the line in — it costs nothing and becomes real if
+the box ever runs a kernel with the controller — but do not count on it.
+
+### What actually protects the host
+
+| | status | what it does |
+|---|---|---|
+| `init: true` | **works** (`Init=true`) | tini as pid 1 reaps orphans; uvicorn cannot |
+| `memory: 4G` | **works** (`Memory=4294967296`) | bounds RAM, not process count |
+| `SCRAPER_MAX_BROWSERS` (default 4) | **works** — in-process | caps concurrent Chromiums per uvicorn worker |
+| `pids_limit: 1024` | **DISCARDED** | nothing |
+
+With the cgroup absent, the browser cap added on 2026-09-06
+(`app/scraper/engines/playwright_engine.py`) is the only thing bounding how many
+Chromiums this service can hold at once. It is a process-wide semaphore, so it
+binds per uvicorn worker: 2 workers x 4 browsers x ~100 tasks ≈ 800 tasks worst
+case, against a host `pid_max` of 32768. That is the budget now — chosen when
+the number it was derived FROM turned out not to be enforced, which is worth
+knowing before raising it.
+
+`init: true` is doing the heavy lifting: a reaped orphan never accumulates, and
+accumulation is what exhausted the pid space. But tini reaping regardless is
+also what can MASK a `close()` that is still leaking, which is why the
+close-on-failure behaviour is pinned by a test rather than watched as a number
+(`trading-service/tests/unit/test_playwright_engine_closes_browser.py`).
 
 The engine-side leak — `browser.close()` reached only on the happy path —
 is fixed in **`trading-service@b75c0e5`**, which owns `app/scraper`.

@@ -14,9 +14,16 @@ services:
     # (kernel.pid_max = 32768): fork() started returning EAGAIN box-wide,
     # which killed the Docker daemon, wedged systemd's D-Bus name, and took
     # the whole NAS down — twice. `init: true` runs tini as pid 1, which
-    # reaps orphans; pids_limit means a future leak kills this container
-    # instead of the machine. 1024 leaves room for real work: the pids
-    # cgroup counts THREADS, and one headless Chromium is ~100 tasks.
+    # reaps orphans; uvicorn cannot.
+    #
+    # ⚠ pids_limit IS DISCARDED ON THIS BOX. DSM's kernel (4.4.302+) has no
+    # pids cgroup controller — `grep -w pids /proc/cgroups` is empty and
+    # `docker inspect` reports PidsLimit=<nil> — so every deploy prints
+    # "PIDs limit discarded" and no limit is applied. It has never been in
+    # effect, including during both outages. Kept because it costs nothing and
+    # becomes real on a kernel that supports it, but the containment it
+    # promises does not exist here: see OPERATIONS.md. What actually bounds
+    # browser count is SCRAPER_MAX_BROWSERS (default 4, per uvicorn worker).
     init: true
     pids_limit: 1024
     volumes:
