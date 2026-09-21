@@ -7,6 +7,11 @@ services:
     env_file: .env
     environment:
       - TZ=America/Los_Angeles
+      # 2026-09-21: NAS egress has per-engine reputation flags (google access
+      # denied, brave rate-suspended, ddg CAPTCHA'd) while bing serves fine.
+      # Pin to working engines; SEARXNG_ENGINES="" restores the full
+      # federation once reputation decays. Collector reads this env directly.
+      - SEARXNG_ENGINES=${SEARXNG_ENGINES:-bing,wikipedia}
     # ── Why this container needs an init and a PID cap (2026-08-20) ──────
     # Playwright orphans a Chromium whenever a scrape fails. Without an
     # init, uvicorn IS pid 1 here and never reap()s, so every orphan became
