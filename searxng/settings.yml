@@ -6,3 +6,13 @@ search:
   formats:
     - html
     - json
+# Proxy egress hook (2026-09-21): if engines start IP-flagging the NAS, set
+# proxies here — no code change needed. Example:
+# outgoing:
+#   proxies:
+#     all://:
+#       - http://user:pass@proxy-host:port
+#       - socks5h://user:pass@proxy2-host:port
+# SearXNG rotates across the list per engine. Prefer one stable egress IP
+# (e.g. a $5 VPS over WireGuard) over free proxy pools: free proxies are
+# captcha-walled, query-sniffing MITMs that degrade results below baseline.
