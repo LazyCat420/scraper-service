@@ -1,0 +1,8 @@
+use_default_settings: true
+server:
+  secret_key: "scraper-sidecar-internal-not-a-real-secret"
+  limiter: false
+search:
+  formats:
+    - html
+    - json

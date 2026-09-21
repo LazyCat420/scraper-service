@@ -60,5 +60,20 @@ services:
           # Chromium is hungry; 2 uvicorn workers each boot their own browser.
           memory: 4G
 
+  # ── SearXNG sidecar (2026-09-21) ──
+  # Keyless meta-search (brave/google/bing federation) exposed to every agent
+  # via /collect source=searxng. DDG does not serve this NAS IP
+  # (DISABLE_DDG_SEARCH=true on every deploy); bench/web measured SearXNG
+  # 30/30 success, nDCG@5 0.933, ~0.8s p50 vs ddg-lite 0/30.
+  # Internal only: no host port. Limiter off is safe on the internal network;
+  # the JSON format is enabled via the mounted settings file.
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped
+    mem_limit: 512m
+
 volumes:
   scraper-logs:
