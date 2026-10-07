@@ -1,4 +1,13 @@
-use_default_settings: true
+# Only the engines scraper-service pins (SEARXNG_ENGINES=bing,wikipedia in
+# docker-compose.yml) exist at all. With every default engine enabled, a
+# request without an `engines` parameter fanned out to DuckDuckGo, Google,
+# Startpage, Mojeek and the rest, which bot-block this network's one public
+# IP; each attempt deepened a block every service in the house shares.
+use_default_settings:
+  engines:
+    keep_only:
+      - bing
+      - wikipedia
 server:
   secret_key: "scraper-sidecar-internal-not-a-real-secret"
   limiter: false

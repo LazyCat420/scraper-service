@@ -64,8 +64,5 @@ chardet==5.2.0
 # have removed it and the failure would have been a per-request ImportError.
 requests>=2.32.0
 
-# DDG Search
-ddgs==9.11.4
-
 # Twitter/X scraping
 twscrape==0.19.1

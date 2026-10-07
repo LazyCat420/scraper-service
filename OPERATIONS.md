@@ -239,6 +239,27 @@ sockets"). A 503 means the shared httpx client is gone. A degraded failure cache
 is reported in `checks` but deliberately does NOT flip the status — memory-only
 costs one wasted fetch per URL, it does not fail a scrape.
 
+## Search engines: no DuckDuckGo (2026-10-06)
+
+The free search engines bot-block this network's one public IP. DuckDuckGo
+first refused the NAS on 2026-07-27, and every scraping attempt deepens a block
+that every service in the house shares. General web search for every project
+now goes through lazy-agent-service's `POST /execute/web_search` (Exa, keyless,
+one cache and one rate limit). Nothing calls `/collect` with `source=duckduckgo`
+or `source=searxng` any more.
+
+- **DuckDuckGo collector:** off unless `DISABLE_DDG_SEARCH` is explicitly
+  `false`. That is the default in trading-service's `app/scraper`, which this
+  image copies at build time. `deploy.sh` still appends `DISABLE_DDG_SEARCH=true`.
+- **`ddgs`:** no longer in `requirements.txt`. Its one user,
+  `youtube_collector`'s DuckDuckGo video fallback, imports it lazily inside a
+  `try` and returns `[]` without it.
+- **SearXNG sidecar:** `searxng/settings.yml` keeps only `bing` and `wikipedia`,
+  the engines `SEARXNG_ENGINES` pins. A request without an `engines` parameter
+  can no longer reach DuckDuckGo, Google, Startpage or the other defaults.
+  SearXNG reads its settings at start, so restart it after changing them:
+  `docker restart searxng`.
+
 ## Open items
 
 - [x] ~~Not yet deployed as of 2026-08-20 — the running image still leaks.~~
