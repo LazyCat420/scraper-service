@@ -257,8 +257,10 @@ or `source=searxng` any more.
 - **SearXNG sidecar:** `searxng/settings.yml` keeps only `bing` and `wikipedia`,
   the engines `SEARXNG_ENGINES` pins. A request without an `engines` parameter
   can no longer reach DuckDuckGo, Google, Startpage or the other defaults.
-  SearXNG reads its settings at start, so restart it after changing them:
-  `docker restart searxng`.
+  `deploy.sh` now syncs `searxng/settings.yml` to the NAS on every deploy and
+  restarts the sidecar when the file changed. SearXNG reads its settings only
+  at start. Before 2026-10-06 the file had been copied by hand once, on
+  2026-09-21, and repo changes never reached it.
 
 ## Open items
 

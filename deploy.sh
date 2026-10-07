@@ -79,6 +79,24 @@ EXTRA_SSH_SYNC() {
   done
   ok "Financial news API keys injected"
 
+  # searxng/settings.yml is bind-mounted into the sidecar and used to be copied
+  # to the NAS by hand once (2026-09-21), so repo changes never reached it.
+  # SearXNG reads it only at start, so restart the sidecar when it changed.
+  info "Syncing searxng/settings.yml..."
+  local SX_DIR="${DEPLOY_COMPOSE_DIR}/searxng"
+  local SX_BEFORE SX_AFTER
+  SX_BEFORE=$(ssh "$DEPLOY_SSH_HOST" "sha256sum '${SX_DIR}/settings.yml' 2>/dev/null | cut -d' ' -f1" || true)
+  ssh "$DEPLOY_SSH_HOST" "mkdir -p '${SX_DIR}'"
+  cat "${SCRIPT_DIR}/searxng/settings.yml" | ssh "$DEPLOY_SSH_HOST" "cat > '${SX_DIR}/settings.yml'"
+  SX_AFTER=$(ssh "$DEPLOY_SSH_HOST" "sha256sum '${SX_DIR}/settings.yml' | cut -d' ' -f1")
+  if [ "$SX_BEFORE" != "$SX_AFTER" ]; then
+    ssh "$DEPLOY_SSH_HOST" "sudo ${DEPLOY_DOCKER_BIN:-/usr/local/bin/docker} restart searxng" >/dev/null 2>&1 \
+      && ok "searxng settings changed; sidecar restarted" \
+      || warn "searxng settings changed but the sidecar did not restart; run: docker restart searxng"
+  else
+    ok "searxng settings unchanged"
+  fi
+
   info "Syncing cookies.txt..."
   # Touch it remotely so Docker Compose doesn't create a directory if it's missing
   ssh "$DEPLOY_SSH_HOST" "touch '${DEPLOY_COMPOSE_DIR}/cookies.txt'"
