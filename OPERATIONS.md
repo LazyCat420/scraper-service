@@ -307,3 +307,14 @@ Adding a column: bump `_SCHEMA_VERSION` in
 `trading-service/app/scraper/core/failure_cache.py` and add the `ALTER` to
 `_migrate`. A database written by a NEWER build is detected and left alone
 rather than downgraded.
+
+## Prism exit — lazy-agent-service (2026-10-16)
+
+prism-service (:7777) is retired for this app. The LLM/agent gateway is
+lazy-agent-service at `http://10.0.0.16:5591` (native `/agent`, `/chat`,
+`/config`). Set `LAZY_AGENT_URL=http://10.0.0.16:5591` in the NAS `.env` (the
+SDK default already matches, so unset also works). Outbound calls send
+`x-project: scraper-service` and `x-username: scraper-service`. The scraper
+subtree source of truth is `finance/trading/trading-service/app/scraper`
+(staged by deploy.sh PRE_BUILD); `app/` and `lazycat/` here are build-time
+copies, so the rename lives there and in `platform/lazycat-sdk`.
