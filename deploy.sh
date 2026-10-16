@@ -2,7 +2,7 @@
 # ============================================================
 # Scraper Service — Build & Deploy to Synology NAS
 #
-# Thin wrapper — all logic lives in ../deploy-kit/lib.sh
+# Thin wrapper — all logic lives in ../../deploy-kit/lib.sh
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,8 +22,8 @@ PRE_BUILD() {
   # and the lazycat SDK). The trading engine is deliberately NOT shipped, so
   # this image stays a lean, domain-agnostic scraper. app/ and lazycat/ are
   # gitignored and regenerated on every build.
-  local TS="${SCRIPT_DIR}/../trading-service"
-  local SDK="${SCRIPT_DIR}/../lazycat-sdk"
+  local TS="${SCRIPT_DIR}/../../finance/trading/trading-service"
+  local SDK="${SCRIPT_DIR}/../../platform/lazycat-sdk"
   [ -d "${TS}/app/scraper" ] || fail "trading-service/app/scraper not found at ${TS} — clone repos as siblings"
   [ -d "${SDK}/lazycat" ]    || fail "lazycat-sdk/lazycat not found at ${SDK} — clone repos as siblings"
 
@@ -108,4 +108,4 @@ EXTRA_SSH_SYNC() {
   fi
 }
 
-source "${SCRIPT_DIR}/../deploy-kit/lib.sh"
+source "${SCRIPT_DIR}/../../deploy-kit/lib.sh"
