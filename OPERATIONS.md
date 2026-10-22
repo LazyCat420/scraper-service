@@ -262,6 +262,35 @@ or `source=searxng` any more.
   at start. Before 2026-10-06 the file had been copied by hand once, on
   2026-09-21, and repo changes never reached it.
 
+## Dependency pinning and security refresh 2026-10-22
+
+`requirements.txt` had loose specifiers (`lxml>=5.0.0`, `urllib3>=2.0.2`, ...), so
+`pip-audit` could not check it and every Docker build resolved "whatever is newest
+today". All direct dependencies are now exact `==` pins, resolved and audited on the
+full tree (Python 3.12 and the Dockerfile's 3.11, both 137 packages, identical except
+numpy/networkx/scipy which are transitive and Python-version dependent).
+
+| Package | From | To | Why |
+|---|---|---|---|
+| fastapi | 0.115.12 | 0.161.0 | 0.115.x caps starlette below 0.47; needed to reach a fixed starlette |
+| starlette (new explicit pin) | 0.46.2 (transitive) | 1.9.0 | 7 advisories, fixed in 0.47.2 / 0.49.1 / 1.0.1 / 1.1.0 / 1.3.0 / 1.3.1 |
+| pydantic / pydantic_core | 2.11.3 / 2.33.1 | 2.13.4 / 2.46.4 | required by fastapi 0.161 |
+| pydantic-settings | 2.13.1 | 2.14.2 | CVE-2026-58203 |
+| yt-dlp | 2026.8.19 | 2026.10.21 | extractors break constantly; newest |
+| urllib3 | `>=2.0.2` | 2.8.0 | pinned to the audited release |
+| requests | `>=2.32.0` | 2.34.2 | pinned |
+| lxml | `>=5.0.0` | 6.1.3 | pinned to today's resolution |
+| fake-useragent | `>=2.0.3` | 2.2.0 | pinned to today's resolution |
+| tenacity | `>=8.5.0` | 9.2.1 | pinned to today's resolution |
+| structlog | `>=24.4.0` | 26.1.0 | pinned to today's resolution |
+
+pip-audit on the resolved set: before, 15 findings in 2 packages (starlette 0.46.2,
+pydantic-settings 2.13.1); after, none (3.12 and 3.11). Tests: `tests/` 16 passed on
+the old and the new manifest; `scraper_main` imports and `GET /health` returns 200
+under the new set. `app/` and `lazycat/` are build copies from trading-service, so
+fastapi/starlette/pydantic here track trading-service's lock. Redeploy needed (not
+done here); re-probe `/health` and `/stream` after deploying.
+
 ## Open items
 
 - [x] ~~Not yet deployed as of 2026-08-20 — the running image still leaks.~~
