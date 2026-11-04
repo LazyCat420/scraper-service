@@ -321,7 +321,7 @@ done here); re-probe `/health` and `/stream` after deploying.
       cache is only real inside THIS container.
 - [x] ~~The scraper subtree has no metrics at all — every observable is a log
       line.~~ Resolved 2026-10-18 (`trading-service@5a88f552`): `/health` now
-      exposes per-engine `engine_counters` (`http`, `crawl4ai`, `playwright`,
+      exposes per-engine `engine_counters` (`http`, `playwright`,
       `auto` with `success`, `failure`, `fallback`, `skipped`) and live
       `browser_slots` (`active`, `max`, `available`) from the Playwright
       process semaphore.
@@ -354,12 +354,10 @@ copies, so the rename lives there and in `platform/lazycat-sdk`.
 
 Shipped from `trading-service` (`5a88f552` + SearXNG snippet date parser):
 
-1. **`E2` (`crawl4ai` honest `success: True` + `auto` fallback to `playwright`):**
-   - `Crawl4aiEngine` handles `crawl4ai` v0.8+ `MarkdownGenerationResult` objects (`raw_markdown` / `fit_markdown`) and marks a response `success=True` whenever HTTP status is `< 400` and extracted markdown is `>= 200` characters, even when `PruningContentFilter` empties `fit_markdown` or `r.success` is conservatively `False`.
-   - `AutoEngine` falls through cleanly from `http` → `crawl4ai` → `playwright` when earlier stages fail or return thin (`< 200` chars) content.
+1. **Engine chain (`http` → `playwright`):** crawl4ai engine removed 2026-11-04 (0 recoveries in 20 hard URLs; 9–100 s latency). `AutoEngine` falls through from `http` → `playwright` when http fails or returns thin (`< 900` chars) content.
 2. **`E3` (structured `published_at` / `publishedDate` on `/scrape` and SearXNG `/collect`):**
    - `POST /scrape` extracts publication timestamps from metadata dicts, HTML `<meta>` tags (`article:published_time`, `og:published_time`, `datePublished`, `pubdate`, `publishdate`, `dc.date`, `sailthru.date`, `date`), `<time datetime="...">`, and `<script type="application/ld+json">` (`datePublished`, `dateCreated`, `uploadDate`), exposing both `published_at` and `publishedDate` at the top level of `ScrapeResponse` as well as in `data` and `metadata`.
    - `SearxngCollector` (`POST /collect` with `source="searxng"`) populates `published_at` and `publishedDate` from top-level `publishedDate` / `pubdate` fields, and when `SEARXNG_ENGINES=bing` omits top-level dates, parses leading snippet timestamps before `" · "` / `" - "` (both relative expressions like `"1 day ago · ..."` / `"9 hours ago · ..."` and explicit dates like `"Oct 15, 2026 · ..."` / `"2026-10-15 - ..."` / `"15 Oct 2026 · ..."`) into ISO-8601 UTC strings.
 3. **`GET /health` operational telemetry:**
-   - Exposes `engine_counters` (`http`, `crawl4ai`, `playwright`, `auto` with `success`, `failure`, `fallback`, `skipped`) and `browser_slots` (`active`, `max`, `available` from `SCRAPER_MAX_BROWSERS`).
+   - Exposes `engine_counters` (`http`, `playwright`, `auto` with `success`, `failure`, `fallback`, `skipped`) and `browser_slots` (`active`, `max`, `available` from `SCRAPER_MAX_BROWSERS`).
 
