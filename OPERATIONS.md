@@ -291,6 +291,21 @@ under the new set. `app/` and `lazycat/` are build copies from trading-service, 
 fastapi/starlette/pydantic here track trading-service's lock. Redeploy needed (not
 done here); re-probe `/health` and `/stream` after deploying.
 
+## SEC identity (2026-11-04)
+
+`/collect` with `source=edgar` needs a real contact in the SEC User-Agent. SEC's
+fair-access policy wants a real declared contact and at most 10 requests/s; this
+service paces its SEC calls at 4/s (>= 0.25 s apart, across concurrent callers).
+
+- **Where the value goes:** `SEC_USER_AGENT=Your Name your.email@real-domain.com` in the
+  `.env` next to `docker-compose.yml` on the NAS (`docker-compose.yml` loads it via
+  `env_file: .env`). Then `docker compose up -d` (or `./deploy.sh`) to recreate the container.
+- **What a missing/placeholder value looks like:** the request returns HTTP 200 with
+  `{"source": "edgar", "count": 0, "items": [], "success": false,
+  "error": "set SEC_USER_AGENT (e.g. 'YourName you@real-domain.com') in the scraper-service .env"}`.
+  Empty values and anything containing `example.com`, `noreply`, `localhost`, `test@` or
+  `admin@example` are refused before any request is sent (SEC answers 403 to those).
+
 ## Open items
 
 - [x] ~~Not yet deployed as of 2026-08-20 — the running image still leaks.~~
