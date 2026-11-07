@@ -97,7 +97,9 @@ free):
 cat /proc/loadavg      # field 4 = running/TOTAL_THREADS, field 5 = last pid issued
 ```
 
-Field 5 sitting near 32768 with a large field 4 is the tell. To attribute
+Field 5 sitting near 32768 with a large field 4 is the tell. While the
+scraper still answers, `curl -s http://10.0.0.16:8001/health/pids` reads the
+same two fields and classifies them (see *PID pressure probe* below). To attribute
 it, on a box where `ps` and `pgrep` no longer work (they need to fork), use
 `/proc` and bash builtins only:
 
@@ -320,26 +322,76 @@ service paces its SEC calls at 4/s (>= 0.25 s apart, across concurrent callers).
       (`SCRAPER_DOMAIN_MAX_AGE_S`, default 90d) as well as `dead_urls`, and is
       reachable from the read path — it previously ran only from `record()`,
       which fires on a 404/410, measured at 8 rows in 14 days.
-- [ ] No alert exists on host pid pressure. Both outages were first reported
-      by a human noticing a dead website. Concurrent browsers are now capped at
-      4 per process (`SCRAPER_MAX_BROWSERS`), which bounds the leak rate but
-      does not alert on it.
-- [ ] `domain_quality` is per-DOMAIN, but the news collector iterates 27 RSS
-      **feeds**. A feed whose articles all live on skipped domains is still
-      fetched and parsed every cycle before anything is skipped.
-- [ ] There is no "last full-text success" TIMESTAMP. `last_seen` (added with
-      the v1 schema migration) records when a domain was last *seen*, not when
-      it last gave us a real article, so "when did this domain last work?" is
-      still unanswerable from this table.
-- [ ] trading-service imports the same `app/scraper` module tree but has no
-      `/app/logs`, so its copy degrades to memory-only with one warning. The
-      cache is only real inside THIS container.
+- [x] ~~No alert exists on host pid pressure.~~ Resolved 2026-11-07:
+      `GET /health/pids` (unauthenticated, in `scraper_main.py`) reads
+      `/proc/loadavg` and `/proc/sys/kernel/pid_max` and answers `ok` / `warn` /
+      `critical` — see *PID pressure probe* below. Every non-`ok` read is logged
+      as a warning, so a poller (or `docker logs`) sees the leak before a human
+      notices a dead website. Pinned by
+      `tests/test_health_probe_and_feeds.py::test_pid_pressure_*`.
+- [x] ~~`domain_quality` is per-DOMAIN, but the news collector iterates 27 RSS
+      **feeds**.~~ Closed 2026-11-07 as documented behaviour: per-feed state
+      exists since 2026-09-21 (`feed_status` table, `GET /health/feeds`), so a
+      feed that keeps failing is visible by URL. Skipping stays per-domain on
+      purpose — see *Domain and feed quality* below.
+- [x] ~~There is no "last full-text success" TIMESTAMP.~~ Closed 2026-11-07:
+      "when did this source last work?" is answered per feed by
+      `feed_status.last_success_at` (exposed as ISO-8601 on `/health/feeds`).
+      Per domain, `good_count` and `thin_streak` remain the signal; the skip
+      rule needs only those (see below).
+- [x] ~~trading-service imports the same `app/scraper` module tree but has no
+      `/app/logs`.~~ Closed 2026-11-07 as accepted design: the learned cache
+      lives in THIS container's named volume. trading-service's in-process copy
+      degrades to memory-only with one warning, which costs one wasted fetch per
+      URL and never fails a scrape (`/health` reports a degraded cache in
+      `checks` without flipping status).
 - [x] ~~The scraper subtree has no metrics at all — every observable is a log
       line.~~ Resolved 2026-10-18 (`trading-service@5a88f552`): `/health` now
       exposes per-engine `engine_counters` (`http`, `playwright`,
       `auto` with `success`, `failure`, `fallback`, `skipped`) and live
       `browser_slots` (`active`, `max`, `available`) from the Playwright
       process semaphore.
+
+## PID pressure probe — `GET /health/pids` (2026-11-07)
+
+The 2026-08-20 outage is a pid-space problem, and `pids_limit` is discarded on
+this kernel, so the scraper now reports the host's task count itself:
+
+```sh
+curl -s http://10.0.0.16:8001/health/pids | jq
+# {"status":"ok","running":3,"total_tasks":812,"last_pid":41234,
+#  "pid_max":32768,"task_ratio":0.0248,"warn_at":13107,"critical_at":19660}
+```
+
+- **Source:** `/proc/loadavg` field 4 (`running/TOTAL` tasks — not
+  pid-namespaced, so inside the container it still counts every task on the
+  NAS) and field 5 (last pid issued), against `/proc/sys/kernel/pid_max`.
+- **Thresholds:** `warn` at `SCRAPER_PID_WARN_RATIO` (default `0.4`) and
+  `critical` at `SCRAPER_PID_CRIT_RATIO` (default `0.6`) of `pid_max`. The
+  outage began failing `fork()` at 21,024 of 32,768 (64%).
+- **Always HTTP 200.** The verdict is the `status` field. Host-wide pressure
+  may come from another container; failing this route frees no pid. The
+  Docker healthcheck stays on `/health`.
+- **Unreadable `/proc`** answers `status: "unknown"` with an `error` string,
+  never a 500.
+- **Helper:** `read_pid_pressure()` in `scraper_main.py`; tests in
+  `tests/test_health_probe_and_feeds.py`.
+
+## Domain and feed quality (2026-11-07)
+
+Two different units, on purpose:
+
+| unit | table | written by | read by | effect |
+|---|---|---|---|---|
+| domain | `domain_quality` (`thin_streak`, `good_count`, `last_thin_at`, `last_seen`) | every `auto` scrape result | `auto_engine` phase 0b `should_skip_domain` | skip a domain with zero good responses, `thin_streak >= 5`, last thin within 24h |
+| feed | `feed_status` (`last_success_at`, `last_failure_at`, `consecutive_failures`, `last_error`) | `news_collector` per RSS fetch (`HTTP <code>`, `0 entries`, exceptions) | `GET /health/feeds` | visibility only: a feed is never skipped |
+
+A feed is still fetched every cycle even when all its articles land on skipped
+domains: the RSS fetch is one cheap request, and the article fetches behind it
+are what the domain rule already skips. One good response zeroes a domain's
+streak permanently, so a bimodal domain (`seekingalpha.com`) is never dropped.
+`prune()` ages out `domain_quality` rows older than
+`SCRAPER_DOMAIN_MAX_AGE_S` (default 90 days).
 
 ## Schema migrations (2026-09-06)
 

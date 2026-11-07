@@ -145,3 +145,63 @@ def test_feed_health_route_empty_when_store_disabled(monkeypatch):
 
     assert r["count"] == 0
     assert r["store_enabled"] is False
+
+
+# ── Host pid pressure probe: GET /health/pids (OPERATIONS.md open item) ──────
+import scraper_main  # noqa: E402
+
+
+def _proc(tmp_path, loadavg, pid_max="32768"):
+    la = tmp_path / "loadavg"
+    la.write_text(loadavg)
+    pm = tmp_path / "pid_max"
+    pm.write_text(pid_max + "\n")
+    return str(la), str(pm)
+
+
+def test_pid_pressure_parses_loadavg_fields(tmp_path):
+    la, pm = _proc(tmp_path, "0.52 0.48 0.40 3/812 41234\n")
+
+    r = scraper_main.read_pid_pressure(la, pm, warn_ratio=0.4, crit_ratio=0.6)
+
+    assert r["status"] == "ok"
+    assert r["running"] == 3
+    assert r["total_tasks"] == 812  # field 4 after the slash
+    assert r["last_pid"] == 41234  # field 5
+    assert r["pid_max"] == 32768
+    assert r["warn_at"] == 13107
+    assert r["critical_at"] == 19660
+
+
+def test_pid_pressure_classifies_the_2026_08_20_outage_as_critical(tmp_path):
+    # 21,024 tasks of 32,768 is where fork() began failing box-wide.
+    la, pm = _proc(tmp_path, "9.10 8.00 7.50 12/21024 32701\n")
+    assert scraper_main.read_pid_pressure(la, pm, 0.4, 0.6)["status"] == "critical"
+
+    la, pm = _proc(tmp_path, "1.00 1.00 1.00 2/14000 30000\n")
+    assert scraper_main.read_pid_pressure(la, pm, 0.4, 0.6)["status"] == "warn"
+
+
+def test_pid_pressure_unreadable_or_malformed_is_unknown_not_an_error(tmp_path):
+    missing = scraper_main.read_pid_pressure(str(tmp_path / "nope"), str(tmp_path / "nope2"))
+    assert missing["status"] == "unknown"
+    assert "FileNotFoundError" in missing["error"]
+
+    la, pm = _proc(tmp_path, "0.1 0.1 0.1\n")
+    assert scraper_main.read_pid_pressure(la, pm)["status"] == "unknown"
+
+    la, pm = _proc(tmp_path, "0.1 0.1 0.1 1/100 50\n", pid_max="0")
+    assert scraper_main.read_pid_pressure(la, pm)["status"] == "unknown"
+
+
+def test_pid_health_route_reads_proc_and_always_answers(monkeypatch, tmp_path):
+    la, pm = _proc(tmp_path, "9.10 8.00 7.50 12/21024 32701\n")
+    monkeypatch.setattr(scraper_main, "PROC_LOADAVG", la)
+    monkeypatch.setattr(scraper_main, "PROC_PID_MAX", pm)
+
+    r = asyncio.run(scraper_main.pid_health())
+
+    assert r["status"] == "critical"
+    assert r["total_tasks"] == 21024
+    paths = {getattr(route, "path", None) for route in scraper_main.app.routes}
+    assert "/health/pids" in paths

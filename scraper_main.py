@@ -116,6 +116,76 @@ app.include_router(stream.router, tags=["Streaming"], dependencies=_guard)
 app.include_router(health.router, tags=["Health"])
 
 
+# ── Host pid pressure (OPERATIONS.md, 2026-08-20 outage) ─────────────────────
+# Leaked Chromium zombies exhausted the HOST's pid space twice, and both times a
+# human noticed a dead website first. `pids_limit` is discarded on DSM's kernel,
+# so the number worth watching is the host-wide task count. /proc/loadavg is not
+# pid-namespaced for that field: inside the container it still reports every
+# task on the box. Field 4 is running/total tasks, field 5 the last pid issued.
+PROC_LOADAVG = "/proc/loadavg"
+PROC_PID_MAX = "/proc/sys/kernel/pid_max"
+PID_WARN_RATIO = float(os.getenv("SCRAPER_PID_WARN_RATIO", "0.4"))
+PID_CRIT_RATIO = float(os.getenv("SCRAPER_PID_CRIT_RATIO", "0.6"))
+
+
+def read_pid_pressure(
+    loadavg_path: str = PROC_LOADAVG,
+    pid_max_path: str = PROC_PID_MAX,
+    warn_ratio: float = PID_WARN_RATIO,
+    crit_ratio: float = PID_CRIT_RATIO,
+) -> dict:
+    """Host task count against pid_max, classified ok / warn / critical.
+
+    The 2026-08-20 outage started failing fork() at 21,024 tasks of a 32,768
+    pid_max (64%), so the defaults warn at 40% and go critical at 60%. An
+    unreadable or malformed /proc reports status "unknown" instead of raising:
+    this feeds a health endpoint and must never take it down.
+    """
+    try:
+        with open(loadavg_path, encoding="ascii") as fh:
+            fields = fh.read().split()
+        running_s, total_s = fields[3].split("/")
+        running, total, last_pid = int(running_s), int(total_s), int(fields[4])
+        with open(pid_max_path, encoding="ascii") as fh:
+            pid_max = int(fh.read().strip())
+        if pid_max <= 0:
+            raise ValueError(f"pid_max {pid_max}")
+    except (OSError, IndexError, ValueError) as e:
+        return {"status": "unknown", "error": f"{type(e).__name__}: {e}"}
+
+    ratio = total / pid_max
+    if ratio >= crit_ratio:
+        status = "critical"
+    elif ratio >= warn_ratio:
+        status = "warn"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "running": running,
+        "total_tasks": total,
+        "last_pid": last_pid,
+        "pid_max": pid_max,
+        "task_ratio": round(ratio, 4),
+        "warn_at": int(pid_max * warn_ratio),
+        "critical_at": int(pid_max * crit_ratio),
+    }
+
+
+@app.get("/health/pids", tags=["Health"])
+async def pid_health() -> dict:
+    """Host pid pressure. Always 200 — the status field carries the verdict.
+
+    Host-wide pressure is not this container's health: the pressure may come
+    from another container, and failing this endpoint would not free a pid.
+    A poller alerts on `status != "ok"`, and every non-ok read is logged.
+    """
+    result = read_pid_pressure(PROC_LOADAVG, PROC_PID_MAX)
+    if result["status"] != "ok":
+        logger.warning("host pid pressure %s: %s", result["status"], result)
+    return result
+
+
 if __name__ == "__main__":
     import uvicorn
 
