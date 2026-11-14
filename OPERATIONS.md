@@ -126,18 +126,21 @@ service has **learned about the web**, and the engine reads it before it makes
 any network request at all — `auto_engine` calls `failure_cache.check(url)` and
 `should_skip_domain(domain)` in phases 0 and 0b, ahead of the fetch.
 
-Two tables:
+Two tables (schema v2, `PRAGMA user_version = 2`):
 
 | table | holds |
 |---|---|
-| `domain_quality` | `domain, thin_streak, good_count, last_thin_at` |
-| `dead_urls` | `url, reason, expires_at` — permanent 404/410s |
+| `domain_quality` | `domain, thin_streak, good_count, last_thin_at, last_seen, browser_tries, browser_successes, last_browser_at` |
+| `dead_urls` | `url, reason, expires_at` — confirmed 404/410s and Playwright-confirmed empty links (7-day TTL, `SCRAPER_FAILURE_TTL_S=604800`) |
 
-A domain is skipped only when it has **zero** good responses, a `thin_streak`
-of 5 or more, and its last thin response was within 24h. One good response
-zeroes the streak permanently. That three-part rule is deliberate, and
-`seekingalpha.com` is why: measured at `thin_streak` 10 with `good_count` 10, it
-is genuinely bimodal, and a plain blocklist would have dropped it.
+A domain is skipped in `should_skip_domain` only when it has **zero** good
+responses, a `thin_streak` of 5 or more, and its last thin response was within
+24h; `browser_is_hopeless` applies the parallel 5-try / 0-success / 24h rule to
+Playwright escalations so sites whose browser path never yields content still get
+one daily probe without burning Chromium slots on every article. Known hard-paywall
+or bot-walled hosts (`UNSCRAPABLE_DOMAINS`: `seekingalpha.com`, `reuters.com`,
+`streetinsider.com`, `chartmill.com`, `thestreet.com`) are skipped before fetch
+and again if an HTTP redirect lands on one.
 
 **Until 2026-09-03 this record lived inside the container, on no volume, and
 every rebuild erased it.** The service then re-learned each domain one wasted
@@ -227,7 +230,7 @@ holds, and the staged copy silently drifted (measured 2026-09-06: `app/scraper`
 matched the build byte-for-byte while `text_utils.py` was 66 lines behind).
 
 ```sh
-curl -s http://10.0.0.16:8001/health | jq '{build, checks, status}'
+curl -s http://10.0.0.16:8001/health | jq '{status, build, checks, admission, rate_limiter, failure_cache}'
 ```
 
 `build.sha` is **trading-service's** commit, not this repo's — the scraper code
@@ -238,8 +241,9 @@ no commit.
 ⚠ `/health` can now return **503**, which it never could before (it returned a
 hardcoded literal, so the health gate only ever tested "uvicorn is accepting
 sockets"). A 503 means the shared httpx client is gone. A degraded failure cache
-is reported in `checks` but deliberately does NOT flip the status — memory-only
-costs one wasted fetch per URL, it does not fail a scrape.
+is reported in `checks.failure_cache` and top-level `failure_cache` (`entries`,
+`max_entries`, `lost_writes`, `store_enabled`) without flipping overall status —
+memory-only costs one wasted fetch per URL rather than failing scrapes.
 
 ## Search engines: no DuckDuckGo (2026-10-06)
 
@@ -329,11 +333,13 @@ service paces its SEC calls at 4/s (>= 0.25 s apart, across concurrent callers).
       as a warning, so a poller (or `docker logs`) sees the leak before a human
       notices a dead website. Pinned by
       `tests/test_health_probe_and_feeds.py::test_pid_pressure_*`.
-- [x] ~~`domain_quality` is per-DOMAIN, but the news collector iterates 27 RSS
-      **feeds**.~~ Closed 2026-11-07 as documented behaviour: per-feed state
-      exists since 2026-09-21 (`feed_status` table, `GET /health/feeds`), so a
-      feed that keeps failing is visible by URL. Skipping stays per-domain on
-      purpose — see *Domain and feed quality* below.
+- [x] ~~`domain_quality` is per-DOMAIN, but the news collector iterates RSS
+      **feeds**.~~ Closed 2026-11-07 as documented behaviour (26 active feeds in
+      `RSS_FEEDS` after removing the dead Yahoo Finance RSS endpoint in `S-18`,
+      `trading-service@f4e85233`): per-feed state exists since 2026-09-21
+      (`feed_status` table, `GET /health/feeds`), so a feed that keeps failing is
+      visible by URL. Skipping stays per-domain on purpose — see *Domain and feed
+      quality* below.
 - [x] ~~There is no "last full-text success" TIMESTAMP.~~ Closed 2026-11-07:
       "when did this source last work?" is answered per feed by
       `feed_status.last_success_at` (exposed as ISO-8601 on `/health/feeds`).
@@ -377,25 +383,27 @@ curl -s http://10.0.0.16:8001/health/pids | jq
 - **Helper:** `read_pid_pressure()` in `scraper_main.py`; tests in
   `tests/test_health_probe_and_feeds.py`.
 
-## Domain and feed quality (2026-11-07)
+## Domain and feed quality (2026-11-07, updated 2026-11-13)
 
 Two different units, on purpose:
 
 | unit | table | written by | read by | effect |
 |---|---|---|---|---|
-| domain | `domain_quality` (`thin_streak`, `good_count`, `last_thin_at`, `last_seen`) | every `auto` scrape result | `auto_engine` phase 0b `should_skip_domain` | skip a domain with zero good responses, `thin_streak >= 5`, last thin within 24h |
-| feed | `feed_status` (`last_success_at`, `last_failure_at`, `consecutive_failures`, `last_error`) | `news_collector` per RSS fetch (`HTTP <code>`, `0 entries`, exceptions) | `GET /health/feeds` | visibility only: a feed is never skipped |
+| domain | `domain_quality` (`thin_streak`, `good_count`, `last_thin_at`, `last_seen`, `browser_tries`, `browser_successes`, `last_browser_at`) | every `auto` scrape result + Playwright escalation | `auto_engine` `should_skip_domain` & `browser_is_hopeless` | skip domain for 24h when `good_count == 0` and `thin_streak >= 5`; skip Playwright escalation for 24h when `browser_successes == 0` and `browser_tries >= 5` |
+| feed | `feed_status` (`last_success_at`, `last_failure_at`, `consecutive_failures`, `last_error`) | `news_collector` per RSS fetch (`HTTP <code>`, `0 entries`, exceptions) | `GET /health/feeds` (sorted `consecutive_failures DESC, last_failure_at DESC`) | visibility only across the 26 active `RSS_FEEDS` (dead Yahoo Finance RSS removed in `S-18`, `f4e85233`): a feed is never auto-skipped |
 
 A feed is still fetched every cycle even when all its articles land on skipped
 domains: the RSS fetch is one cheap request, and the article fetches behind it
 are what the domain rule already skips. One good response zeroes a domain's
-streak permanently, so a bimodal domain (`seekingalpha.com`) is never dropped.
-`prune()` ages out `domain_quality` rows older than
-`SCRAPER_DOMAIN_MAX_AGE_S` (default 90 days).
+streak permanently. `prune()` ages out `domain_quality` rows older than
+`SCRAPER_DOMAIN_MAX_AGE_S` (default 90 days) and expired `dead_urls` rows older
+than `SCRAPER_FAILURE_TTL_S` (default 7 days).
 
-## Schema migrations (2026-09-06)
+## Schema migrations (2026-09-06, v2 2026-11-13)
 
-`failure_cache.db` now carries `PRAGMA user_version` and a migration ladder.
+`failure_cache.db` carries `PRAGMA user_version` (`_SCHEMA_VERSION = 2`: v1
+added `last_seen`; v2 added `browser_tries`, `browser_successes`, and
+`last_browser_at` to `domain_quality`) and a migration ladder.
 This matters because the database **outlives the deploy** since `3e5651c`: an
 old file meets new code every time. Before the ladder, the first added column
 would have raised `no such column`, been classified as a permanent fault, and
@@ -421,10 +429,30 @@ copies, so the rename lives there and in `platform/lazycat-sdk`.
 
 Shipped from `trading-service` (`5a88f552` + SearXNG snippet date parser):
 
-1. **Engine chain (`http` → `playwright`):** crawl4ai engine removed 2026-11-04 (0 recoveries in 20 hard URLs; 9–100 s latency). `AutoEngine` falls through from `http` → `playwright` when http fails or returns thin (`< 900` chars) content.
+1. **Engine chain (`http` → `playwright`):** crawl4ai engine removed 2026-11-04 (0 recoveries in 20 hard URLs; 9–100 s latency). `AutoEngine` falls through from `http` → `playwright` when http fails or returns thin (`< 900` chars) content, unless gated by `browser_is_hopeless` or `UNSCRAPABLE_DOMAINS`.
 2. **`E3` (structured `published_at` / `publishedDate` on `/scrape` and SearXNG `/collect`):**
    - `POST /scrape` extracts publication timestamps from metadata dicts, HTML `<meta>` tags (`article:published_time`, `og:published_time`, `datePublished`, `pubdate`, `publishdate`, `dc.date`, `sailthru.date`, `date`), `<time datetime="...">`, and `<script type="application/ld+json">` (`datePublished`, `dateCreated`, `uploadDate`), exposing both `published_at` and `publishedDate` at the top level of `ScrapeResponse` as well as in `data` and `metadata`.
    - `SearxngCollector` (`POST /collect` with `source="searxng"`) populates `published_at` and `publishedDate` from top-level `publishedDate` / `pubdate` fields, and when `SEARXNG_ENGINES=bing` omits top-level dates, parses leading snippet timestamps before `" · "` / `" - "` (both relative expressions like `"1 day ago · ..."` / `"9 hours ago · ..."` and explicit dates like `"Oct 15, 2026 · ..."` / `"2026-10-15 - ..."` / `"15 Oct 2026 · ..."`) into ISO-8601 UTC strings.
 3. **`GET /health` operational telemetry:**
-   - Exposes `engine_counters` (`http`, `playwright`, `auto` with `success`, `failure`, `fallback`, `skipped`) and `browser_slots` (`active`, `max`, `available` from `SCRAPER_MAX_BROWSERS`).
+   - Exposes `engine_counters` (`http`, `playwright`, `auto` with `success`, `failure`, `fallback`, `skipped`, plus `skip_reasons`) and `browser_slots` (`active`, `max`, `available` from `SCRAPER_MAX_BROWSERS`).
+
+## Cross-worker SQLite state, admission control & skip parity (2026-11-13)
+
+Staged from `trading-service/app/scraper/` (`f76e774d` + `f4e85233`; `C1–C4`, `C1b`, `W0.1`, `W0.3`, `W2.3`, `S-18`) across `uvicorn --workers 2`:
+
+1. **Persistent `failure_cache.db` (`C1`, `C1b`, `W0.1` — `core/failure_cache.py`):**
+   - **Schema v2 & 7-day dead-link TTL:** `_SCHEMA_VERSION = 2`, `DEFAULT_TTL_S = 7 * 24 * 3600` (`SCRAPER_FAILURE_TTL_S`), `DEFAULT_MAX_ENTRIES = 4096`. Real HTTP `404`/`410` responses without block-page markers record `dead_link`; UA-sniffed `404` block pages escalate to Playwright first instead of poisoning `dead_urls` (`7ad08fc8`), and `< 120`-char `2xx` shells record `empty_link` only after Playwright also fails.
+   - **Domain browser-hopeless skip (`C1b`):** `browser_is_hopeless(domain)` and `record_browser_result()` skip Playwright escalation for 24 h (`SKIP_TTL_S = 86400`) once `browser_successes == 0` and `browser_tries >= 5` (`SKIP_AFTER_THIN = 5`), allowing one probe per day while static `UNSCRAPABLE_DOMAINS` (`seekingalpha.com`, `reuters.com`, `streetinsider.com`, `chartmill.com`, `thestreet.com`) short-circuit both pre-fetch and post-HTTP-redirect.
+   - **Lock discipline & write-loss accounting (`W0.1`):** `FailureCache` protects `_entries`, `_last_prune`, and `_lost_writes` under `threading.Lock()` across all cache reads and mutations (`check`, `record`, `clear`, `size`, `stats`, `_prune_locked`) **without holding the lock across SQLite I/O**. When `check()` misses memory and queries `SqliteFailureStore.check()`, it re-acquires `self._lock` and writes `_entries[url]` only if no fresher in-memory entry arrived concurrently. `SqliteFailureStore.record(url, reason, expires_at) -> bool` returns `False` on SQLite write errors; `FailureCache.record()` increments `_lost_writes` (warning on the first lost write, debug thereafter) and surfaces `{"entries", "max_entries", "lost_writes", "store_enabled"}` under `failure_cache` on `GET /health`.
+2. **Shared cross-worker `rate_limiter.db` & RFC-9110 `Retry-After` (`C4`, `W0.3` — `core/shared_limiter.py`, `core/rate_limiter.py`, `engines/http_engine.py`):**
+   - `SharedRateLimiter` persists per-domain pacing in SQLite WAL `/app/logs/rate_limiter.db` (`SCRAPER_RATE_LIMITER_DB`, `BEGIN IMMEDIATE` atomic slot reservation in `domain_next(key, next_at)`) so configured per-domain rates apply container-wide across both `uvicorn` workers rather than 2×.
+   - Wait ceiling `MAX_WAIT_S = 30.0` (`SCRAPER_RATE_LIMITER_MAX_WAIT_S`) raises `RateLimitWaitTooLong` without advancing the slot when a domain is backed up past 30 s, while `HARD_CAP_S = 3600.0` (`SCRAPER_RATE_LIMITER_HARD_CAP_S`) bounds `push_out`. After `MAX_CONSECUTIVE_STORE_ERRORS = 3` SQLite errors, the limiter falls back to in-process memory and reports `db_ok`, `waits`, `wait_ms_total`, `store_errors`, `consecutive_store_errors`, `refused_too_long`, and `pushed_out` under `rate_limiter` on `GET /health`.
+   - On HTTP `429` or `503` (`ASKED_TO_WAIT_STATUSES`), `http_engine._parse_retry_after()` parses both RFC-9110 integer/finite-float delay-seconds and HTTP-date headers (`email.utils.parsedate_to_datetime`, clamped `>= 0.0`), pushes out the shared domain slot via `rate_limiter.push_out(domain, asked)`, and returns `engine_used="http (waiting)"`; `AutoEngine` returns `engine_used="auto (waiting)"` without escalating to Playwright or caching the URL as dead.
+3. **Shared SQLite WAL operational metrics & `AutoEngine` `skip_reasons` parity (`W2.3` — `core/metrics.py`, `engines/auto_engine.py`):**
+   - `MetricsStore` persists engine and skip counters in SQLite WAL `/app/logs/scraper_metrics.db` (`SCRAPER_METRICS_DB_PATH`, table `scraper_counters(bucket, metric, total)`, with temp/in-memory fallback if `/app/logs` is read-only), aggregating operational counts across all `uvicorn` workers on `GET /health`.
+   - `AutoEngine._record_auto_skip(skip_reason)` maintains the strict invariant `auto.skipped == sum(skip_reasons.values())` across `skip_reasons` (`dead_link`, `empty_link`, `unscrapable_domain`, `domain_thin`, `browser_hopeless`). A first-time live HTTP `404`/`410` over the network is recorded via `_failed_permanent()` as `engine_used="auto (failed)"` (`auto.failure += 1`, never `skipped`); subsequent hits served from `failure_cache` skip network I/O, return `engine_used="auto (skipped)"`, and increment both `auto.skipped` and `skip_reasons["dead_link" | "empty_link"]`.
+4. **Admission gate & health probes (`C3`, `S-18` — `api/admission.py`, `scraper_main.py`, `collectors/feed_registry.py`):**
+   - `AdmissionGate` (`admission_slot` FastAPI dependency on `/scrape`, `/scrape/batch`, and `/collect`, paired with a 120 s route deadline on `/scrape` & `/scrape/batch` and off-loop `asyncio.to_thread` HTML/JSON/RSS decoding) bounds each worker to `SCRAPER_ADMISSION_INFLIGHT=8` active requests and `SCRAPER_ADMISSION_WAITING=16` queued callers; excess arrivals fail fast with HTTP `429` + `Retry-After: 5` (`SCRAPER_ADMISSION_RETRY_AFTER_S`) and report live `inflight`, `waiting`, `admitted`, and `rejected` under `admission` on `GET /health`.
+   - `GET /health/pids` monitors host PID exhaustion (`/proc/loadavg` vs `pid_max`, warn `0.4` / critical `0.6`, always HTTP 200), and `GET /health/feeds` surfaces per-feed RSS health worst-first (`consecutive_failures DESC, last_failure_at DESC`) with the dead Yahoo Finance RSS endpoint removed from `RSS_FEEDS` (`S-18`, `f4e85233`).
+
 
