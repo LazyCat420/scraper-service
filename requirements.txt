@@ -18,8 +18,6 @@ starlette==1.9.0
 uvicorn[standard]==0.34.2
 httpx[brotli,http2,socks]==0.28.1
 pydantic==2.13.4
-pydantic-settings==2.14.2
-python-dotenv==1.2.2
 
 # HTML parsing / text extraction
 beautifulsoup4==4.14.3
@@ -58,6 +56,3 @@ urllib3==2.8.0
 # the image only as a transitive dependency, which means a resolver change could
 # have removed it and the failure would have been a per-request ImportError.
 requests==2.34.2
-
-# Twitter/X scraping
-twscrape==0.19.1

@@ -41,7 +41,7 @@ PRE_BUILD() {
   # cp line here, add the module to STAGED_MODULES in that test.
   cp "${TS}/app/utils/text_utils.py" "${SCRIPT_DIR}/app/utils/text_utils.py"
   : > "${SCRIPT_DIR}/app/utils/__init__.py"
-  # lazycat SDK: text_utils imports lazycat.llm_json; engines import lazycat.ratelimit
+  # lazycat SDK: text_utils imports lazycat.llm_json
   cp -r "${SDK}/lazycat" "${SCRIPT_DIR}/lazycat"
   # Drop compiled caches so they can't shadow fresh source in the image
   find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -67,7 +67,6 @@ PRE_BUILD() {
 
 EXTRA_SSH_SYNC() {
   info "Appending environment overrides to remote .env..."
-  ssh "$DEPLOY_SSH_HOST" "echo 'DISABLE_DDG_SEARCH=true' >> '${DEPLOY_COMPOSE_DIR}/.env'"
   ssh "$DEPLOY_SSH_HOST" "echo 'YOUTUBE_COOKIES_FILE=/app/cookies.txt' >> '${DEPLOY_COMPOSE_DIR}/.env'"
 
   # Inject financial news API keys from vault-service master env

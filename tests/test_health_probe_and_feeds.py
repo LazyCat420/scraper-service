@@ -54,11 +54,12 @@ def test_probe_hits_each_engine_with_spacing(monkeypatch):
 
     r = asyncio.run(search_engine_health())
 
-    assert calls == ["google", "brave", "duckduckgo", "bing", "startpage"]
-    # Spacing BETWEEN engines only: 4 sleeps for 5 engines.
-    assert sleeps == [health_mod.ENGINE_PROBE_SPACING_S] * 4
+    assert calls == ["bing", "wikipedia"]
+    # Spacing BETWEEN engines only: 1 sleep for 2 engines.
+    assert sleeps == [health_mod.ENGINE_PROBE_SPACING_S]
     assert r["probed"] is True
-    assert r["engines"]["google"] == {"results": 3, "unresponsive_reason": None}
+    assert r["engines"]["bing"] == {"results": 3, "unresponsive_reason": None}
+    assert r["engines"]["wikipedia"] == {"results": 3, "unresponsive_reason": None}
     assert r["cached_at"] is not None
     assert r["next_probe_at"] is not None
 
@@ -68,10 +69,10 @@ def test_cache_prevents_second_probe(monkeypatch):
     monkeypatch.setattr(health_mod.httpx, "AsyncClient", _fake_client(calls))
 
     first = asyncio.run(search_engine_health())
-    assert len(calls) == 5
+    assert len(calls) == 2
 
     second = asyncio.run(search_engine_health())
-    assert len(calls) == 5  # no new upstream queries
+    assert len(calls) == 2  # no new upstream queries
     assert second["probed"] is False
     assert second["engines"] == first["engines"]
     assert second["cached_at"] == first["cached_at"]
@@ -88,7 +89,7 @@ def test_unresponsive_engine_reports_reason(monkeypatch):
     assert r["engines"]["bing"]["results"] == 0
     assert "searxng upstream down" in r["engines"]["bing"]["unresponsive_reason"]
     # One dead engine must not take the others down with it.
-    assert r["engines"]["google"]["unresponsive_reason"] is None
+    assert r["engines"]["wikipedia"]["unresponsive_reason"] is None
 
 
 def test_feed_status_tracking(tmp_path):

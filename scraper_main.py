@@ -2,7 +2,7 @@
 scraper-service — General-purpose scraping microservice (standalone).
 
 Domain-agnostic. No trading logic, no financial context — all domain knowledge
-stays in the calling service. Exposes HTTP, Playwright and crawl4ai
+stays in the calling service. Exposes HTTP and Playwright
 scraping engines plus the Reddit / YouTube / News / social collectors.
 
 The scraper source of truth lives in `trading-service/app/scraper/`; this repo's
@@ -99,7 +99,7 @@ app = FastAPI(
     title="scraper-service",
     description=(
         "General-purpose scraping microservice. Domain-agnostic. "
-        "HTTP / Playwright / crawl4ai engines + Reddit, YouTube, "
+        "HTTP / Playwright engines + Reddit, YouTube, "
         "News/RSS, social and financial-news collectors."
     ),
     version="1.0.0",

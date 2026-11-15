@@ -245,24 +245,18 @@ is reported in `checks.failure_cache` and top-level `failure_cache` (`entries`,
 `max_entries`, `lost_writes`, `store_enabled`) without flipping overall status —
 memory-only costs one wasted fetch per URL rather than failing scrapes.
 
-## Search engines: no DuckDuckGo (2026-10-06)
+## Search engines: SearXNG sidecar (2026-10-06)
 
-The free search engines bot-block this network's one public IP. DuckDuckGo
-first refused the NAS on 2026-07-27, and every scraping attempt deepens a block
-that every service in the house shares. General web search for every project
-now goes through lazy-agent-service's `POST /execute/web_search` (Exa, keyless,
-one cache and one rate limit). Nothing calls `/collect` with `source=duckduckgo`
-or `source=searxng` any more.
+The free search engines bot-block this network's one public IP, and every
+scraping attempt deepens a block that every service in the house shares. General
+web search for every project goes through `lazy-agent-service`'s
+`POST /execute/web_search` (Exa, keyless, one cache and one rate limit), while
+`lazy-agent-service` also actively calls `POST /collect` with `source="searxng"`
+for SearXNG meta-search.
 
-- **DuckDuckGo collector:** off unless `DISABLE_DDG_SEARCH` is explicitly
-  `false`. That is the default in trading-service's `app/scraper`, which this
-  image copies at build time. `deploy.sh` still appends `DISABLE_DDG_SEARCH=true`.
-- **`ddgs`:** no longer in `requirements.txt`. Its one user,
-  `youtube_collector`'s DuckDuckGo video fallback, imports it lazily inside a
-  `try` and returns `[]` without it.
 - **SearXNG sidecar:** `searxng/settings.yml` keeps only `bing` and `wikipedia`,
   the engines `SEARXNG_ENGINES` pins. A request without an `engines` parameter
-  can no longer reach DuckDuckGo, Google, Startpage or the other defaults.
+  can no longer reach Google, Startpage or the other defaults.
   `deploy.sh` now syncs `searxng/settings.yml` to the NAS on every deploy and
   restarts the sidecar when the file changed. SearXNG reads its settings only
   at start. Before 2026-10-06 the file had been copied by hand once, on
@@ -296,21 +290,6 @@ the old and the new manifest; `scraper_main` imports and `GET /health` returns 2
 under the new set. `app/` and `lazycat/` are build copies from trading-service, so
 fastapi/starlette/pydantic here track trading-service's lock. Redeploy needed (not
 done here); re-probe `/health` and `/stream` after deploying.
-
-## SEC identity (2026-11-04)
-
-`/collect` with `source=edgar` needs a real contact in the SEC User-Agent. SEC's
-fair-access policy wants a real declared contact and at most 10 requests/s; this
-service paces its SEC calls at 4/s (>= 0.25 s apart, across concurrent callers).
-
-- **Where the value goes:** `SEC_USER_AGENT=Your Name your.email@real-domain.com` in the
-  `.env` next to `docker-compose.yml` on the NAS (`docker-compose.yml` loads it via
-  `env_file: .env`). Then `docker compose up -d` (or `./deploy.sh`) to recreate the container.
-- **What a missing/placeholder value looks like:** the request returns HTTP 200 with
-  `{"source": "edgar", "count": 0, "items": [], "success": false,
-  "error": "set SEC_USER_AGENT (e.g. 'YourName you@real-domain.com') in the scraper-service .env"}`.
-  Empty values and anything containing `example.com`, `noreply`, `localhost`, `test@` or
-  `admin@example` are refused before any request is sent (SEC answers 403 to those).
 
 ## Open items
 
