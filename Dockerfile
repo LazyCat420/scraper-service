@@ -3,10 +3,10 @@
 # ============================================================
 # General-purpose scraping microservice. Exposes HTTP API on :8001.
 #
-# `app/` and `lazycat/` are NOT committed — deploy.sh copies them from
-# trading-service/app (scraper subtree) and lazycat-sdk at build time, so the
-# scraper logic has a single source of truth in trading-service. To build by
-# hand, run deploy.sh's PRE_BUILD copy steps first (see deploy.sh).
+# `app/` is NOT committed — deploy.sh copies it from
+# trading-service/app (scraper subtree + text_utils + lib/llm_json) at build
+# time, so the scraper logic has a single source of truth in trading-service.
+# To build by hand, run deploy.sh's PRE_BUILD copy steps first.
 # ============================================================
 
 FROM python:3.11-slim AS deps

@@ -23,6 +23,7 @@ PRE_BUILD() {
   # scraper. app/ is gitignored and regenerated on every build.
   local TS="${SCRIPT_DIR}/../../finance/trading/trading-service"
   [ -d "${TS}/app/scraper" ] || fail "trading-service/app/scraper not found at ${TS} — clone repos as siblings"
+  [ -f "${TS}/app/lib/llm_json.py" ] || fail "trading-service/app/lib/llm_json.py not found at ${TS} — pull trading-service master"
 
   step "Staging scraper source from trading-service/app/scraper"
   rm -rf "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat"
@@ -31,7 +32,8 @@ PRE_BUILD() {
   cp -r "${TS}/app/scraper/." "${SCRIPT_DIR}/app/scraper/"
   # app.utils.text_utils and app.lib.llm_json are the ONLY modules outside
   # app/scraper that the subtree may import (enforced by trading-service's
-  # tests/unit/test_scraper_subtree_import_closure.py).
+  # tests/unit/test_scraper_subtree_import_closure.py — STAGED_MODULES). If
+  # you add a cp line here, add the module to STAGED_MODULES in that test.
   cp "${TS}/app/utils/text_utils.py" "${SCRIPT_DIR}/app/utils/text_utils.py"
   : > "${SCRIPT_DIR}/app/utils/__init__.py"
   cp "${TS}/app/lib/llm_json.py" "${SCRIPT_DIR}/app/lib/llm_json.py"
@@ -49,7 +51,7 @@ PRE_BUILD() {
   # code being shipped is trading-service's.
   local TS_SHA TS_DIRTY
   TS_SHA=$(git -C "$TS" rev-parse --short HEAD 2>/dev/null || echo unknown)
-  TS_DIRTY=$(git -C "$TS" status --porcelain -- app/scraper app/utils/text_utils.py 2>/dev/null)
+  TS_DIRTY=$(git -C "$TS" status --porcelain -- app/scraper app/utils/text_utils.py app/lib/llm_json.py 2>/dev/null)
   if [ -n "$TS_DIRTY" ]; then
     warn "trading-service has UNCOMMITTED scraper changes — this image will contain code that is in no commit:"
     echo "$TS_DIRTY" | sed 's/^/    /'

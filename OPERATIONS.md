@@ -397,8 +397,7 @@ rather than downgraded.
 
 prism-service (:7777) is retired for this app. The LLM/agent gateway is
 lazy-agent-service at `http://10.0.0.16:5591` (native `/agent`, `/chat`,
-`/config`). Set `LAZY_AGENT_URL=http://10.0.0.16:5591` in the NAS `.env` (the
-SDK default already matches, so unset also works). Outbound calls send
+`/config`). Set `LAZY_AGENT_URL=http://10.0.0.16:5591` in the NAS `.env`. Outbound calls send
 `x-project: scraper-service` and `x-username: scraper-service`. The scraper
 subtree source of truth is `finance/trading/trading-service/app/scraper`
 (staged by deploy.sh PRE_BUILD); `app/` here is a build-time
