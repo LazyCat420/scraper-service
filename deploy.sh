@@ -18,35 +18,28 @@ PRE_BUILD() {
 
   # ── Stage scraper source from trading-service (single source of truth) ──
   # The scraper logic lives in trading-service/app/scraper; we copy ONLY that
-  # subtree (plus the one broader-app helper it uses — app.utils.text_utils —
-  # and the lazycat SDK). The trading engine is deliberately NOT shipped, so
-  # this image stays a lean, domain-agnostic scraper. app/ and lazycat/ are
-  # gitignored and regenerated on every build.
+  # subtree (plus app.utils.text_utils and app.lib.llm_json). The trading engine
+  # is deliberately NOT shipped, so this image stays a lean, domain-agnostic
+  # scraper. app/ is gitignored and regenerated on every build.
   local TS="${SCRIPT_DIR}/../../finance/trading/trading-service"
-  local SDK="${SCRIPT_DIR}/../../platform/lazycat-sdk"
   [ -d "${TS}/app/scraper" ] || fail "trading-service/app/scraper not found at ${TS} — clone repos as siblings"
-  [ -d "${SDK}/lazycat" ]    || fail "lazycat-sdk/lazycat not found at ${SDK} — clone repos as siblings"
 
   step "Staging scraper source from trading-service/app/scraper"
   rm -rf "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat"
-  mkdir -p "${SCRIPT_DIR}/app/scraper" "${SCRIPT_DIR}/app/utils"
+  mkdir -p "${SCRIPT_DIR}/app/scraper" "${SCRIPT_DIR}/app/utils" "${SCRIPT_DIR}/app/lib"
   : > "${SCRIPT_DIR}/app/__init__.py"
   cp -r "${TS}/app/scraper/." "${SCRIPT_DIR}/app/scraper/"
-  # app.utils.text_utils is the ONLY module outside app/scraper that the subtree
-  # may import. That is not an observation, it is an invariant, enforced by
-  # trading-service's tests/unit/test_scraper_subtree_import_closure.py — an
-  # allowlist keyed on exactly the copies below. This comment used to assert the
-  # same thing as a fact and was false for 27 days: two collectors imported
-  # app.utils.async_utils, which ImportErrors in THIS image only. If you add a
-  # cp line here, add the module to STAGED_MODULES in that test.
+  # app.utils.text_utils and app.lib.llm_json are the ONLY modules outside
+  # app/scraper that the subtree may import (enforced by trading-service's
+  # tests/unit/test_scraper_subtree_import_closure.py).
   cp "${TS}/app/utils/text_utils.py" "${SCRIPT_DIR}/app/utils/text_utils.py"
   : > "${SCRIPT_DIR}/app/utils/__init__.py"
-  # lazycat SDK: text_utils imports lazycat.llm_json
-  cp -r "${SDK}/lazycat" "${SCRIPT_DIR}/lazycat"
+  cp "${TS}/app/lib/llm_json.py" "${SCRIPT_DIR}/app/lib/llm_json.py"
+  : > "${SCRIPT_DIR}/app/lib/__init__.py"
   # Drop compiled caches so they can't shadow fresh source in the image
-  find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  find "${SCRIPT_DIR}/app" "${SCRIPT_DIR}/lazycat" -name '*.pyc' -delete 2>/dev/null || true
-  ok "scraper source staged (app/scraper + app/utils/text_utils + lazycat)"
+  find "${SCRIPT_DIR}/app" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  find "${SCRIPT_DIR}/app" -name '*.pyc' -delete 2>/dev/null || true
+  ok "scraper source staged (app/scraper + app/utils/text_utils + app/lib/llm_json)"
 
   # ── Drift: say which commit is being shipped, and prove the source is clean ──
   # The staged tree is gitignored, so nothing here would otherwise notice that

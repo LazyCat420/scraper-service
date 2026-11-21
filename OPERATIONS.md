@@ -287,7 +287,7 @@ numpy/networkx/scipy which are transitive and Python-version dependent).
 pip-audit on the resolved set: before, 15 findings in 2 packages (starlette 0.46.2,
 pydantic-settings 2.13.1); after, none (3.12 and 3.11). Tests: `tests/` 16 passed on
 the old and the new manifest; `scraper_main` imports and `GET /health` returns 200
-under the new set. `app/` and `lazycat/` are build copies from trading-service, so
+under the new set. `app/` is staged at build time from trading-service, so
 fastapi/starlette/pydantic here track trading-service's lock. Redeploy needed (not
 done here); re-probe `/health` and `/stream` after deploying.
 
@@ -401,8 +401,8 @@ lazy-agent-service at `http://10.0.0.16:5591` (native `/agent`, `/chat`,
 SDK default already matches, so unset also works). Outbound calls send
 `x-project: scraper-service` and `x-username: scraper-service`. The scraper
 subtree source of truth is `finance/trading/trading-service/app/scraper`
-(staged by deploy.sh PRE_BUILD); `app/` and `lazycat/` here are build-time
-copies, so the rename lives there and in `platform/lazycat-sdk`.
+(staged by deploy.sh PRE_BUILD); `app/` here is a build-time
+copy, so the rename lives in `trading-service`.
 
 ## E2, E3 & `/health` engine counters (2026-10-18)
 

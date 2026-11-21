@@ -6,7 +6,7 @@ stays in the calling service. Exposes HTTP and Playwright
 scraping engines plus the Reddit / YouTube / News / social collectors.
 
 The scraper source of truth lives in `trading-service/app/scraper/`; this repo's
-`app/` and `lazycat/` trees are copied in at build time by deploy.sh (the same
+`app/` tree is copied in at build time by deploy.sh (the same
 build-time-mirror pattern lazy-agent-service uses), so there is exactly one copy
 of the scraper logic to maintain. This entrypoint mounts ONLY the scraper
 routers — none of the trading engine.

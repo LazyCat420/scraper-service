@@ -38,7 +38,6 @@ RUN apt-get update \
 
 # ── Service source (build-copied by deploy.sh PRE_BUILD) ──────
 COPY app/ ./app/
-COPY lazycat/ ./lazycat/
 COPY scraper_main.py ./scraper_main.py
 
 RUN chown -R appusr:appgrp /app
